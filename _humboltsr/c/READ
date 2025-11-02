@@ -368,7 +368,7 @@ LOCAL void SCANQUOTE (char Q)
     if(CH==Q)
       { GETCHAR(); if(CH!=Q) return; }
     if(CH=='\\') 
-      { int suM; 
+      { int sum; 
  GETCHAR();
  switch(CH)
  { case 'n': CH='\n'; break;
