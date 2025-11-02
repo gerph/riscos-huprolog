@@ -1,7 +1,3 @@
-RMEnsure SharedCLibrary 3.66 Load System:Modules.Clib
-RMEnsure SharedCLibrary 3.66 Error 0 Shared C Library not found or too old
-RMEnsure FPEmulator 2.80 Load System:Modules.FPEmulator
-RMEnsure FPEmulator 2.80 Error 0 FPEmulator module not found or too old
 set HUPro$Dir <Obey$Dir>
 if "<HuPro$RC>" = "" then set HuPro$RC prologrc
 if "%1" = "-r" then huprolog %*0
