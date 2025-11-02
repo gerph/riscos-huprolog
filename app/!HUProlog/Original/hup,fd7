@@ -1,0 +1,7 @@
+| Example script for running HU Prolog
+if "<HUPro$Dir>" = "" then set HUPro$Dir <Obey$Dir>
+| Requires C library version 3.50 or better
+RMEnsure SharedCLibrary 3.50 RMLoad System:modules.CLib
+Dir <Obey$Dir>
+wimpslot 720K 720K
+prolog %*0

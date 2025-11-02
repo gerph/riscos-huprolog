@@ -1,0 +1,488 @@
+/*
+
+This assignment is intended to check that you have reasonable
+facility in using Prolog.  You have to deal with pictures like this.
+
+	ooooooooooooooooooooooooooooooooooooooooooooo
+	oooo----------------ooooooooooooooooooooooooo
+	oooo----------------ooooooooooooooooooooooooo
+	oooo---------@@@@@@@@@@@@@@@@@@oooooooooooooo
+	oooo---------@@@@@@@@@@@@@@@@@@oooooooooooooo
+	oooo---------@@@@@@@@@@@@@@@@@@/////////ooooo
+	oooo---------@@@@@@@@@@@@@@@@@@/////////ooooo
+	oooo---------@@@@@@@@@@@@@@@@@@/////////ooooo
+	ooooooooooooo@@@@@@@@@@@@@@@@@@/////////ooooo
+	ooooooooooooo@@@@@@@@@@@@@@@@@@/////////ooooo
+	ooooooooooooo@@@@@@@@@@@@@@@@@@/////////ooooo
+	ooooooooooooo@@@@@@@@@@@@@@@@@@/////////ooooo
+	ooooooooooooooooooooooooo///////////////ooooo
+	ooooooooooooooooooooooooo///////////////ooooo
+	ooooooooooooooooooooooooo///////////////ooooo
+	ooooooooooooooooooooooooo///////////////ooooo
+	ooooooooooooooooooooooooooooooooooooooooooooo
+	ooooooooooooooooooooooooooooooooooooooooooooo
+
+
+This file is in fact a program that defines pictures of this sort as
+Prolog terms.
+
+You can assume that at least three corners of each rectanlge will be
+visible, and that all rectangles are different "colours".
+
+
+(i) Write code that converts the list of list of character
+    representation of these pictures given below into a list like
+    this :
+
+        [ ..., at(7,12,-), ..., at(15,11,@), .... ]
+
+    of facts about coordinates and the "colour" at at coordinate.
+    Take the top left square as (1,1).
+
+(ii) Write code that, given a colour, finds the left, right, top and
+     bottom edges of the rectangle of the colour in the picture.
+     (You need only do one of those if you can explain how would do
+     the others similarly.)
+
+(iii) Write code that finds whether the square of a given colour
+      extends to a given point, whether it is the topmost square at
+      that point or not.  You may but need not rely on the special
+      properties of the pictures.
+
+(iv) Write code that takes a list of facts representing such a
+     picture, and a colour, and yields a list of facts describing
+     the same picture except that the square of the given colour has
+     floated to to the top.
+
+(v) Write code that prints a list of facts representing a picture of
+    this sort as an ASCII array like the one at the top of this
+    page, and use it to show that your code for section (iv) works.
+
+
+For this assignment, it is much more important that the code be
+clear, correct and simple that that it be efficient.  For instance,
+the assignment demands that the array be represented as a list of
+facts.  This is an insane (very bulky and slow) representation,
+given what we know about the pictures.
+
+(vi) Suggest a different representation of such picture, and explain
+     how you would express such a representation in Prolog. You need
+     not explain how they would be used by a possible program.
+
+
+Your answer should include for each programming section
+--- commented Prolog code
+--- an absolutely unedited script that shows your code runs
+
+Answers on listing paper are perfectly OK, provided the sheets are
+separated, in order, and stapled, and the logical and actual starts
+of pages coincide.
+
+*/
+
+/* ----------------------------------------------------------------
+
+			--
+			-@
+*/
+
+micro_picture([  	[-,-],
+			[-,@]		        ]).
+
+/* ----------------------------------------------------------------
+
+			----oo
+			--@@@@
+			oo@@@@
+			oooooo
+*/
+
+small_picture([ 	[-,-,-,-,o,o],
+			[-,-,@,@,@,@],
+			[o,o,@,@,@,@],
+			[o,o,o,o,o,o]		]).
+
+/* ----------------------------------------------------------------
+
+	oooooooooooooooooooooooooooooooooo
+	oooo-----------ooooooooooooooooooo
+	oooo-----------ooooooooooooooooooo
+	oooo------@@@@@@@@@@@@@@@ooooooooo
+	oooo------@@@@@@@@@@@@@@@ooooooooo
+	oooo------@@@@@@@@@@@@@@@//////ooo
+	oooo------@@@@@@@@@@@@@@@//////ooo
+	oooooooooo@@@@@@@@@@@@@@@//////ooo
+	oooooooooo@@@@@@@@@@@@@@@//////ooo
+	oooooooooo@@@@@@@@@@@@@@@//////ooo
+	ooooooooooooooooooo////////////ooo
+	ooooooooooooooooooo////////////ooo
+	ooooooooooooooooooo////////////ooo
+	oooooooooooooooooooooooooooooooooo
+	oooooooooooooooooooooooooooooooooo
+*/
+
+large_picture([
+
+[o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o],
+[o,o,o,o,-,-,-,-,-,-,-,-,-,-,-,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o],
+[o,o,o,o,-,-,-,-,-,-,-,-,-,-,-,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o],
+[o,o,o,o,-,-,-,-,-,-,@,@,@,@,@,@,@,@,@,@,@,@,@,@,@,o,o,o,o,o,o,o,o,o],
+[o,o,o,o,-,-,-,-,-,-,@,@,@,@,@,@,@,@,@,@,@,@,@,@,@,o,o,o,o,o,o,o,o,o],
+[o,o,o,o,-,-,-,-,-,-,@,@,@,@,@,@,@,@,@,@,@,@,@,@,@,/,/,/,/,/,/,o,o,o],
+[o,o,o,o,-,-,-,-,-,-,@,@,@,@,@,@,@,@,@,@,@,@,@,@,@,/,/,/,/,/,/,o,o,o],
+[o,o,o,o,o,o,o,o,o,o,@,@,@,@,@,@,@,@,@,@,@,@,@,@,@,/,/,/,/,/,/,o,o,o],
+[o,o,o,o,o,o,o,o,o,o,@,@,@,@,@,@,@,@,@,@,@,@,@,@,@,/,/,/,/,/,/,o,o,o],
+[o,o,o,o,o,o,o,o,o,o,@,@,@,@,@,@,@,@,@,@,@,@,@,@,@,/,/,/,/,/,/,o,o,o],
+[o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,/,/,/,/,/,/,/,/,/,/,/,/,o,o,o],
+[o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,/,/,/,/,/,/,/,/,/,/,/,/,o,o,o],
+[o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,/,/,/,/,/,/,/,/,/,/,/,/,o,o,o],
+[o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o],
+[o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o,o]  ]).
+
+/***********************************************************
+ ****   Gerph's routines to process this funny thingy   ****
+ ***********************************************************/
+
+/*========================*
+  General support routines
+ *========================*
+
+/* Append an item to a list !!! */
+append(OldList,Item,[Item|OldList]).
+
+/* Returns the colour as it stands in the list */
+read_actual_colour([],X,Y,invalid).
+read_actual_colour([at(X,Y,Col)|Rest],X,Y,Col).
+read_actual_colour([Head|Rest],X,Y,Col):-
+  read_actual_colour(Rest,X,Y,Col).
+
+/* Find the farthest bounds of a block,
+   used to determine the size of the map. */
+block_bounds(Block,Right,Bottom):-
+  block_rightbound(Block,1,Right),
+  block_bottombound(Block,1,Bottom).
+
+% sub-routine to find right bound
+block_rightbound([at(X,Y,Col)|Rest],SoFar,Right):-
+  X > SoFar,
+  !,
+  block_rightbound(Rest,X,Right).
+block_rightbound([Start|Rest],SoFar,Right):-
+  block_rightbound(Rest,SoFar,Right).
+block_rightbound([],Right,Right).
+
+% sub-routine to find bottom bound
+block_bottombound([at(X,Y,Col)|Rest],SoFar,Bottom):-
+  Y > SoFar,
+  !,
+  block_bottombound(Rest,Y,Bottom).
+block_bottombound([Start|Rest],SoFar,Bottom):-
+  block_bottombound(Rest,SoFar,Bottom).
+block_bottombound([],Bottom,Bottom).
+
+
+/*================================================*
+   Speed up so that I don't have to type too much
+ *================================================*/
+
+% returns the converted form of the small_picture
+small(Out):-
+  small_picture(Map),
+  convert_map(Map,Out).
+
+% returns the converted form of the large_picture
+big(Out):-
+  large_picture(Map),
+  convert_map(Map,Out).
+
+/*====================================================*
+   Question 1 -
+     Change this into an list in the form :
+     [.... at(x,y,col), at(x,y,col) ....]
+
+   Answer -
+     convert_map(Original,Result).
+
+   Test routines -
+     see small/1.
+ *====================================================*/
+
+/* converts the 'picture' form into facts of co-ordinates & colours */
+convert_map(Original,Result):-
+  convert_to_coords(Original,1,[],Result).
+
+/* Run through the rows */
+convert_to_coords([Head|Tail],Row,SoFar,Result):-
+  NewRow is (Row+1),
+  % Go down the list FIRST so that we add stuff to the head
+  convert_to_coords(Tail,NewRow,SoFar,ColumnResult),
+  convert_row(Head,Row,1,ColumnResult,Result).
+convert_to_coords([],Row,SoFar,SoFar).
+
+/* Now run through each column in the rows */
+convert_row([Head|Tail],Row,Col,SoFar,Result):-
+  NewCol is (Col+1),
+  % In a similar way, do the Row stuff first
+  convert_row(Tail,Row,NewCol,SoFar,Later),
+  append(Later,at(Col,Row,Head),Result).
+convert_row([],Row,Col,SoFar,SoFar).
+
+
+/*=====================================================*
+   Question 2 -
+     Find the bounds of one of the squares, given it's
+     colour.
+
+   Answer -
+     convert_map(Original,Block),
+     square_bounds(Block,Col,Left,Right,Top,Bottom).
+
+   Test routines -
+     small(Map),square_bounds(Map,@,Left,Right,Top,Bottom).
+ *=====================================================*/
+
+/* Find the bounds of a particular colour */
+square_bounds(Block,Col,Left,Right,Top,Bottom):-
+  % find just the bits referred to by the colour
+  get_square(Block,Col,Square),
+  % Find each of the bounds seperately
+  find_leftmost(Square,Left),
+  find_rightmost(Square,Right),
+  find_topmost(Square,Top),
+  find_bottommost(Square,Bottom).
+
+/* Reads out just the information about a given colour */
+get_square(Block,Col,Result):-
+  get_square_partial(Block,Col,[],Result).
+get_square_partial([at(X,Y,Col)|Rest],Col,SoFar,[at(X,Y,Col)|Result]):-
+  % if it matches use add it to the list
+  !,
+  get_square_partial(Rest,Col,SoFar,Result).
+get_square_partial([Head|Rest],Col,SoFar,Result):-
+  % if it does not match, ignore it
+  get_square_partial(Rest,Col,SoFar,Result).
+get_square_partial([],Col,SoFar,SoFar).
+
+/* The following routines (find_xxxmost/2) are pretty much
+   identical and the same principles apply to each */
+% Finds the left most location in the square
+find_leftmost([at(X,Y,Col)|Rest],Left):-
+  % for the first occurance we use the first entry as leftmost
+  SoFar is X,
+  find_leftmost_partial(Rest,SoFar,Left).
+find_leftmost_partial([at(X,Y,Col)|Rest],SoFar,Left):-
+  % when it is lower than the lowest to date, use it
+  X < SoFar,
+  !,
+  find_leftmost_partial(Rest,X,Left).
+find_leftmost_partial([Head|Rest],SoFar,Left):-
+  % when it is not lower than the lowest, just skip
+  find_leftmost_partial(Rest,SoFar,Left).
+find_leftmost_partial([],X,X).
+
+% Finds the right most location in the square
+find_rightmost([at(X,Y,Col)|Rest],Right):-
+  SoFar is X,
+  find_rightmost_partial(Rest,SoFar,Right).
+find_rightmost_partial([at(X,Y,Col)|Rest],SoFar,Right):-
+  X > SoFar,
+  !,
+  find_rightmost_partial(Rest,X,Right).
+find_rightmost_partial([Head|Rest],SoFar,Right):-
+  find_rightmost_partial(Rest,SoFar,Right).
+find_rightmost_partial([],X,X).
+
+% Finds the top most location in the square
+find_topmost([at(X,Y,Col)|Rest],Top):-
+  SoFar is Y,
+  find_topmost_partial(Rest,SoFar,Top).
+find_topmost_partial([at(X,Y,Col)|Rest],SoFar,Top):-
+  Y < SoFar,
+  !,
+  find_topmost_partial(Rest,Y,Top).
+find_topmost_partial([Head|Rest],SoFar,Top):-
+  find_topmost_partial(Rest,SoFar,Top).
+find_topmost_partial([],X,X).
+
+% Finds the bottom most location in the square
+find_bottommost([at(X,Y,Col)|Rest],Bottom):-
+  SoFar is Y,
+  find_bottommost_partial(Rest,SoFar,Bottom).
+find_bottommost_partial([at(X,Y,Col)|Rest],SoFar,Bottom):-
+  Y > SoFar,
+  !,
+  find_bottommost_partial(Rest,Y,Bottom).
+find_bottommost_partial([Head|Rest],SoFar,Bottom):-
+  find_bottommost_partial(Rest,SoFar,Bottom).
+find_bottommost_partial([],X,X).
+
+
+
+/*=====================================================*
+   Question 3 -
+     Find if a square exists at a paricular location
+     and if it is at the top.
+
+   Answer -
+     convert_map(Original,Block),
+     square_exists_at(Block,Col,X,Y).
+     % succeeds if the square is somewhere in the stack
+       at that point
+     convert_map(Original,Block),
+     square_is_at_top_at(Block,Col,X,Y).
+     % succeeds if the square is at the top of the stack
+       at that point
+
+   Test routines -
+     small(Map), square_exists_at(Map,-,1,1).
+       yes
+     small(Map), square_exists_at(Map,o,1,1).
+       yes
+     small(Map), square_exists_at(Map,@,1,1).
+       no
+     small(Map), square_is_at_top_at(Map,-,1,1).
+       yes
+     small(Map), square_is_at_top_at(Map,o,1,1).
+       no
+ *=====================================================*/
+
+/* Find if the block exists - Block, Colour, X co-ord, Y co-ord */
+square_exists_at(Block,Col,X,Y):-
+  % find the bounds of the square
+  square_bounds(Block,Col,Left,Right,Top,Bottom),
+  % if any of these three fail then the whole routine will fail
+  Left =< X, Right >= X,
+  Top =< Y, Bottom >= Y.
+
+/* succeeds if the square is at the top at that point */
+square_is_at_top_at(Block,Col,X,Y):-
+  read_actual_colour(Block,X,Y,Col).
+
+
+
+/*=====================================================*
+   Question 4 -
+     Re-make the block given, raising a given colour to
+     the top of the stack
+
+   Answer -
+     convert_map(Original,Block),
+     raise_square(Block,Col,Result).
+
+   Test routines -
+     small(Map),raise_square(Map,o,New).
+     small(Map),raise_square(Map,-,New).
+ *=====================================================*/
+
+/* raise the colour to the top of the map */
+raise_square(Block,Col,Result):-
+  % use of 'block' twice to allow checking of the squares existance with
+  % the first one, and the second one to recurse down the list
+  raise_square_partial(Block,Block,Col,[],Result).
+
+/* again do this in bits so that it is easier */
+raise_square_partial(Block,[at(X,Y,OrigCol)|Rest],NewCol,SoFar,
+                                               [at(X,Y,NewCol)|Result]):-
+  % if the colour requested exists at that location then we add it
+  square_exists_at(Block,NewCol,X,Y),
+  % ... and recurse
+  raise_square_partial(Block,Rest,NewCol,SoFar,Result).
+
+/* if it does not exist at that point, leave the colour alone */
+raise_square_partial(Block,[at(X,Y,OrigCol)|Rest],NewCol,SoFar,
+                                               [at(X,Y,OrigCol)|Result]):-
+  % ... and recurse
+  raise_square_partial(Block,Rest,NewCol,SoFar,Result).
+
+/* when we have finished, return the result */
+raise_square_partial(Block,[],NewCol,SoFar,SoFar).
+
+
+/*=====================================================*
+   Question 5 -
+     Convert a 'facts' representation to a ASCII map
+
+   Answer -
+     convert_map(Original,Block),
+     raise_square(Block,Col,Result).
+
+   Test routines -
+     small(Map),view_map(Map).
+     small(Map),raise_square(Map,o,New),view_map(New).
+
+   Note:
+     This would seem to be a very memory intensive
+     operation due to the coding due to the recursion
+     involved. HUProlog on my machine dies at line 7
+     of the large_picture database in it's maximum
+     memory setting.
+ *=====================================================*/
+
+/* display the map in ASCII form */
+view_map(Map):-
+  % if we do it this way we do not have to worry about the
+  % map being sorted
+  block_bounds(Map,Right,Bottom),
+  \+ view_dorows(Map,Right,Bottom,1).
+
+/* Display each of the rows of the diagram */
+view_dorows(Map,Right,Bottom,Y):-
+  % We will recurse until the end of the map, and then fail
+  Y =< Bottom,
+  \+ view_docolumns(Map,Right,Bottom,Y,1),
+  nl, !,
+  % round and around we go...
+  NewY is (Y+1),
+  view_dorows(Map,Right,Bottom,NewY).
+
+/* Display each of the columns within each row */
+view_docolumns(Map,Right,Bottom,Y,X):-
+  % We will recurse until the end of the row, and then fail
+  X =< Right,
+  read_actual_colour(Map,X,Y,Col),
+  write(Col), !,
+  % another iteration
+  NewX is (X+1),
+  view_docolumns(Map,Right,Bottom,Y,NewX).
+
+
+/*=====================================================*
+   Question 6 -
+     Suggest an alternate representation of the picture
+     and explain how it could be represented in prolog.
+
+   Answer -
+     It should be possible to represent the squares
+     themselves as a list of facts, eg
+     square(depth,left,bottom,right,top) so that each
+     one was checked by it's height. You could then use
+     the highest depth to indicate the 'most obscured'
+     square, and the lowest (ie 1) to mean the top most
+     square. Then all that would be required when viewing
+     would be to fill in the grid /on exit/ from the
+     functions whilst recursing down so that the first
+     square processed would be the bottom most one.
+
+     When finding the point that is visible for each
+     square you would just check up the squares until
+     one which the required co-ordinates lies within.
+
+     This would be an extension of part ii) and should
+     take only a small step to convert the data into
+     depth a sorted list. The problem would be
+     recognising a squares depth when it is not possible
+     to tell, eg - and / in the large picture. This
+     could be done by means of moving all the data
+     around when such a state occurred. However, as in
+     most cases there would only be 2-3 entries to move
+     (depending on the number of squares). Worst case
+     would be O(n) as you would need to go through all
+     the squares created to date.
+
+     However, raising a square to the top would simply
+     mean changing two entries (ie swapping the top and
+     the required square's depths) if you only wanted
+     to raise the square. If you wanted to remove the
+     square and place it on top, obscuring the top-most
+     then that would, again, be O(n).
+*/
