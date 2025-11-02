@@ -1,0 +1,266 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     **
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+/* 
+** The generation of HU-Prolog is parametrized by
+**
+** wordsize:                    BIT8  BIT16  BIT32
+** operating system:            UNIX  MS_DOS  VMS  CPM RISCOS
+** addressmode                  BYTE/WORD/POINTER OFFSET
+** arithmetic:                  LONGARITH  REALARITH SYMBOLARITH
+** unification mode:            OCCUR_CHECK (switchable or not)
+** generation of inlinecode:    INLINE
+** 
+** extensions:                  WINDOWS   Window-Interface 
+**                              DBASE3    dBASE-III-Interface
+**                              HELP      online-help
+**                              USER      C-Interface
+**
+*/
+
+#ifdef  ARCHY
+#       define BIT32 1
+#       define RISCOS  1
+#       define DEBUG 1
+#       define OCCUR_CHECK 1
+#       define INLINE 1
+#       define POINTEROFFSET 1
+#       define REALARITH 0
+#       define HACKY 0
+#       define ASSIGN 0
+#       define USER 1
+#       define WINDOWS 0
+#       define MEMORYSIZE 2000
+#       define MAXDEPTH 500
+#       define INITFILE 1
+#       define PROLOGRC "prologrc"
+#       define OYSTERRC "oysterrc"
+#       define RESFILE "<HUPro$Dir>.huplstate"
+#endif
+#ifdef  SUN3 
+#       define BIT32 1
+#       define UNIX  1
+#       define DEBUG 1
+#       define OCCUR_CHECK 0
+#       define SYMBOLARITH 1
+#       define INLINE 1
+#       define POINTEROFFSET 1
+#       define HACKY 1
+#       define USER 1
+#       define WINDOWS 0
+#       define MEMORYSIZE 10000 
+#       define MAXDEPTH 1000
+#endif
+
+#ifdef  P8000
+#       define BIT16 1
+#       define UNIX  1
+#       define DEBUG 1
+#       define REALARITH 1
+#       define LONGARITH 1
+#       define SYMBOLARITH 1
+#       define INLINE 1
+#       define BYTEOFFSET 1
+#       define HACKY 1
+#       define USER 1
+#       define HELP 1
+#       define WINDOWS 0
+#       define DBASE3 0
+#       define SMALLVERSION 1
+#       define MEMORYSIZE 64
+#       define MAXDEPTH 175
+#endif
+
+#ifdef XENIX286
+#       define BIT16 1
+#       define UNIX  1
+#       define LONGARITH 1
+#       define REALARITH 0
+#       define WINDOWS 1
+#       define DBASE3 0
+#       define HELP 1
+#       define INLINE 1
+#       define SYMBOLARITH 1
+#       define BYTEOFFSET 1
+#       define USER 1
+#       define DEBUG 0
+#       define MAXDEPTH 300
+#endif
+
+#ifdef XENIX386
+#       define BIT16 1
+#       define UNIX  1
+#       define LONGARITH 1
+#       define REALARITH 1
+#       define WINDOWS 1
+#       define DBASE3 1
+#       define HELP 1
+#       define INLINE 1
+#       define SYMBOLARITH 1
+#       define BYTEOFFSET 1
+#       define USER 1
+#       define DEBUG 1
+#       define MAXDEPTH 300
+#endif
+
+#ifdef MS_DOS
+#       define BIT16 1
+#       define BYTEOFFSET 1
+#       define DEBUG 0
+#       define REALARITH 1
+#       define LONGARITH 1
+#       define SYMBOLARITH 1
+#       define USER 1
+#       define DBASE3 1
+#       define INLINE 1
+#       define MSC 1
+#       define MAXDEPTH 300
+#endif
+
+#ifdef BIC
+#       define BIT8 1
+#       define CPM 1
+#       define OCCUR_CHECK 0
+#       define INLINE 0
+#       define DEBUG 0
+#       define HELP 1
+#       define void int 
+#       define MEMORYSIZE 120 /* KByte */
+#       define MAXDEPTH 50
+#endif
+
+#ifndef BIC
+#define BIC 0
+#endif
+#ifndef SUN3
+#define SUN3 0
+#endif
+#ifndef XENIX286
+#define XENIX286 0
+#endif
+#ifndef REALARITH
+#       define REALARITH 0
+#endif
+
+#ifndef LONGARITH
+#       define LONGARITH 0
+#endif
+
+#ifndef SYMBOLARITH
+#       define SYMBOLARITH 0
+#endif
+
+#ifndef INITFILE
+#       define INITFILE 0
+#endif
+
+#ifndef ASSIGN
+#       define ASSIGN 1
+#endif
+
+#ifndef P8000
+#define P8000 0
+#endif
+
+#ifndef DEBUG
+#define DEBUG 0
+#endif
+
+/* Operating Systems */
+
+#ifndef VMS
+#define VMS 0
+#endif
+
+#ifndef UNIX
+#define UNIX 0
+#endif
+
+#ifndef MS_DOS
+#define MS_DOS 0
+#endif
+
+#ifndef CPM
+#define CPM 0
+#endif
+
+#ifndef HACKY
+#define HACKY 0
+#endif
+
+#ifndef MSC
+#define MSC 0
+#endif
+
+/* System Options */
+
+#ifndef WINDOWS
+#define WINDOWS 0
+#endif
+
+#ifndef DBASE3 
+#define DBASE3 0
+#endif
+
+#ifndef HELP 
+#define HELP 0
+#endif
+
+/* Word Size */
+
+#ifndef BIT8
+#define BIT8 0
+#endif
+
+#ifndef BIT16
+#define BIT16 0
+#endif
+
+#ifndef BIT32
+#define BIT32 0
+#endif
+
+/* Unification Mode */
+
+#ifndef OCCUR_CHECK
+#define OCCUR_CHECK 1
+#endif
+
+#ifndef BYTEOFFSET
+#define BYTEOFFSET 0
+#endif
+
+#ifndef WORDOFFSET
+#define WORDOFFSET 0
+#endif
+
+#ifndef POINTEROFFSET
+#define POINTEROFFSET 0
+#endif
+
+#ifndef INLINE
+#define INLINE 1
+#endif
+
+#ifndef MAXDEPTH 
+#define MAXDEPTH 200
+#endif
+
+#ifndef SMALLVERSION
+#define SMALLVERSION 0
+#endif
+
+

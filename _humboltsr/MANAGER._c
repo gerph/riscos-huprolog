@@ -1,0 +1,449 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     **
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+#include "systems.h"
+#include "types.h"
+#include "errors.h"
+#include "atoms.h"
+#include "manager.h"
+
+IMPORT ENV ENVTOP;
+IMPORT void ABORT(),ERROR(),SYSTEMERROR();      /* from linebufffer.c */
+IMPORT void ARGERROR(),ERROR();    /* from linebuff.c */
+FORWARD void reclaim_heap();
+
+
+/*
+EXPORT STRINGSTOP;
+EXPORT ATOMSTOP,ATOMHTOP;
+EXPORT setsize();  
+#if REALARITH
+EXPORT TERM mkreal(REAL);
+EXPORT REAL realval(TERM);
+#endif
+#if LONGARITH
+EXPORT TERM mklong(LONG);
+EXPORT LONG longval(TERM);
+#endif
+*/
+
+
+/**********************************************************
+*                                                         *
+*  ATOMS                                                  *
+*                                                         *
+**********************************************************/
+
+GLOBAL ATOM BASEATOM=atom_units(0);
+GLOBAL ATOM ATOMHTOP=LAST_ATOM;
+#ifdef DYNMEM
+GLOBAL ATOM ATOMSTOP;
+#else
+GLOBAL ATOM ATOMSTOP = MAXATOMS;
+#endif
+
+/*   0         =>       +----------------------------+  */
+/*                      |  predefined atoms          |  */
+/*   LASTATOM  =>       + - - - - - - - - - - - - - -+  */
+/*                      |  global atoms in           |  */
+/*                      |  hashtable      |  |  |    |  */
+/*   ATOMHTOP  =>       |                 v  v  v    |  */
+/*                      |  - free - free - free -    |  */
+/*                      |                            |  */
+/*   ATOMSTOP  =>       |                 ^  ^  ^    |  */
+/*                      |  local          |  |  |    |  */
+/*                      |  atomstack      |  |  |    |  */
+/*   MAXATOMS  =>       +----------------------------+  */
+
+/**********************************************************
+*                                                         *
+*  TERMS                                                  *
+*                                                         *
+**********************************************************/
+
+#if !POINTEROFFSET
+GLOBAL TERM BASETERM=term_units(0);
+GLOBAL TERM GLOTOP=term_units(1);       
+GLOBAL TERM HEAPTOP=MAXTERMS;
+GLOBAL TERM LASTTERM=MAXTERMS;
+#endif
+
+#if POINTEROFFSET
+#ifdef DYNMEM
+GLOBAL TERM BASETERM;
+GLOBAL TERM GLOTOP;       
+GLOBAL TERM HEAPTOP;
+GLOBAL TERM LASTTERM;
+#else
+GLOBAL TERM BASETERM= &TERMAREA[0];
+GLOBAL TERM GLOTOP= &TERMAREA[1];       
+GLOBAL TERM HEAPTOP= &TERMAREA[MAXTERMS];
+GLOBAL TERM LASTTERM= &TERMAREA[MAXTERMS];
+#endif
+#endif
+
+                  /* increasing index of local variables */
+                  /*     |                               */
+                  /*     |                               */
+                  /*     V                               */
+                  /*                                     */
+                  /*     ^                               */
+                  /*     |                               */
+                  /*     |                               */
+                  /* decreasing index of heap nodes      */
+               
+/**********************************************************
+*                                                         *
+*  STRINGS                                                *
+*                                                         *
+**********************************************************/
+
+GLOBAL STRING BASESTRING=0;
+GLOBAL STRING STRINGHTOP=1;
+#ifdef DYNMEM
+GLOBAL STRING STRINGSTOP;
+#else
+GLOBAL STRING STRINGSTOP=MAXSTRINGS;
+#endif
+
+/* #if POINTEROFFSET
+GLOBAL STRING BASESTRING= &STRINGTAB[0];
+GLOBAL STRING STRINGHTOP= &STRINGTAB[1];
+GLOBAL STRING STRINGSTOP= &STRINGTAB[MAXSTRINGS];
+#endif
+*/
+
+/*   BASESTRING =>      +----------------------------+  */
+/*                      |  global strings            |  */
+/*                      |                 |  |  |    |  */
+/*   STRINGHTOP  =>     |                 v  v  v    |  */
+/*                      |  - free - free - free -    |   */
+/*                      |                            |  */
+/*   STRINGSTOP  =>     |                 ^  ^  ^    |  */
+/*                      |  local          |  |  |    |  */
+/*                      |  stringstack    |  |  |    |  */
+/*   MAXSTRINGS         +----------------------------+  */
+
+
+
+
+/**********************************************************
+*                                                         *
+*  ATOMS                                                  *
+*                                                         *
+**********************************************************/
+
+
+GLOBAL ATOM heapatom(void)
+{if(inc_atom(ATOMHTOP)>=ATOMSTOP) ABORT(ATOMSPACEE);
+ return (ATOM)ATOMHTOP ;
+}
+
+GLOBAL ATOM stackatom(void)
+{if(dec_atom(ATOMSTOP)<=ATOMHTOP) ABORT(ATOMSPACEE);
+ nextatom(ATOMSTOP)=(card)STRINGSTOP;
+ return (ATOM)ATOMSTOP;
+}
+
+#if ! INLINE
+GLOBAL boolean isheapatom(register ATOM A)
+{
+    return (A && A <=ATOMHTOP);
+}
+#endif
+
+/**********************************************************
+*                                                         *
+*  TERMS                                                  *
+*                                                         *
+**********************************************************/
+
+GLOBAL TERM arg1(register TERM T)
+{ T=son(T); deref(T); return T; }
+
+GLOBAL TERM arg2(register TERM T)
+{ T=son(T)+term_units(1); /* T=br(T); */ deref(T); return T; }
+
+GLOBAL TERM arg3(register TERM T)
+{ T=son(T)+term_units(2); /* T=br(br(T)); */ deref(T); return T; }
+
+GLOBAL TERM arg4(register TERM T)
+{ T=son(T)+term_units(3); /* T=br(br(br(T))); */  deref(T); return T; }
+
+GLOBAL TERM mkfunc(register ATOM N, register TERM T)
+{ register TERM X;
+  X=GLOTOP; 
+  if(inc_term(GLOTOP)>=HEAPTOP) reclaim_heap(true);
+  name(X)=N; son(X)=T;
+  return X;
+}
+
+GLOBAL TERM mkatom(ATOM N)
+{ register TERM X;
+  X=GLOTOP; 
+  if(inc_term(GLOTOP)>=HEAPTOP) reclaim_heap(true);
+  name(X)=N; son(X)=nil_term;
+  return X;
+}
+
+GLOBAL TERM mkint(int N)
+{ register TERM X;
+  X=GLOTOP; 
+  if(inc_term(GLOTOP)>=HEAPTOP) reclaim_heap(true);
+  name(X)=INTT; ival(X)=N;
+  return X;
+}
+
+GLOBAL TERM mkfreevar(void)
+{ register TERM X;
+  X=GLOTOP; 
+  if(inc_term(GLOTOP)>=HEAPTOP) reclaim_heap(true);
+  name(X)=UNBOUNDT; son(X)=nil_term;
+  return X;
+}
+
+GLOBAL TERM stackterms(register int N)
+{ register TERM X;
+  if(N==0) return nil_term;
+  X=GLOTOP;
+  GLOTOP+=term_units(N);
+  if(GLOTOP>=HEAPTOP) reclaim_heap(true);
+  return X;
+}
+
+GLOBAL TERM mk2sons(ATOM NAM1, TERM SON1, ATOM NAM2, TERM SON2)
+{ register TERM T,TT;
+    T=GLOTOP; TT=GLOTOP+term_units(1); GLOTOP+=term_units(2);
+    if(GLOTOP>=HEAPTOP) reclaim_heap(true);
+    name(T)=NAM1; son(T)=SON1; 
+    name(TT)=NAM2; son(TT)=SON2; 
+    return T;
+}
+
+GLOBAL TERM freelist[MAXARITY+1];  /* chain of disposed nodes */ 
+
+GLOBAL void InitMemory(void)
+{ int N;
+  for (N=0;N<=MAXARITY;N++) freelist[N]=nil_term;
+}
+
+GLOBAL TERM heapterms(register int N)
+{ register TERM T;
+  if(N > MAXARITY) SYSTEMERROR("heapterms");
+  if( N==0) return nil_term;
+  if(non_nil_term(T=freelist[N])) 
+    { freelist[N]=son(T); return T; }
+  T=HEAPTOP-term_units(N);
+  if(GLOTOP>=T) 
+  {
+      reclaim_heap(false);
+      if(GLOTOP >= (T=HEAPTOP-term_units(N))) 
+	  ABORT(LOCALSPACEE);
+  }
+  HEAPTOP=T;
+  inc_term(T);
+  return T;
+}
+
+GLOBAL void freeterms(REGISTER int N, REGISTER TERM T)
+{ register int I;
+  register TERM X;
+  if(N==0) return;
+  /* if(N > MAXARITY || T==nil_term) SYSTEMERROR("freeterms"); */
+  for(I=N,X=T;--I>=0;next_br(X))
+    if(name(X)>FUNCNAME) 
+      freeterms(arity(name(X)),son(X));
+  name(T)=VART; son(T)=freelist[N]; freelist[N]=T;
+}
+
+void reclaim_heap(boolean abort)
+/* reclaim heapnodes if possible */
+{
+    register TERM T,LASTT;
+    register int i;
+
+  start:
+    for(i=1;i<=MAXARITY;++i)
+	if(LASTT= (T=freelist[i]))
+	{   
+	    if(T== (HEAPTOP+term_units(1)))
+	    {
+		HEAPTOP +=term_units(i);
+		/* sum +=i; */
+		if(T==LASTT) freelist[i]=son(T);
+		else son(LASTT)=son(T);
+		goto start;
+	    }
+	    LASTT=T; T=son(T);
+	}
+    if(abort && HEAPTOP <=GLOTOP)
+	ABORT(LOCALSPACEE);
+}
+
+/**********************************************************
+*                                                         *
+*  STRINGS                                                *
+*                                                         *
+**********************************************************/
+
+GLOBAL STRING heapstring(register string s)
+{ register STRING P;
+  STRING Q;
+  Q=P=STRINGHTOP;
+  while(repchar(P++)= *s++);
+  if(P >=STRINGSTOP) ABORT(aSTRINGSPACEE);
+  STRINGHTOP=P;
+  return Q;
+}
+
+GLOBAL STRING stackstring(register string s)
+{ register STRING P;
+  register string ss;
+  ss=s; P= --STRINGSTOP; while(*ss++) P--;
+  nextatom(ATOMSTOP)=(card)(STRINGSTOP=P);
+  if(STRINGHTOP>=STRINGSTOP)ABORT(aSTRINGSPACEE); 
+  while(repchar(P++)= *s++);
+  return STRINGSTOP;
+}
+
+/**********************************************************
+*                                                         *
+*  NUMBERS                                                *
+*                                                         *
+**********************************************************/
+
+#if REALARITH
+LOCAL union{ REAL r; int ir[REALSIZE]; } ri;
+#endif
+#if LONGARITH
+LOCAL union{ LONG l; int il[LONGSIZE]; } li;
+#endif
+
+#if REALARITH
+GLOBAL TERM mkreal(REAL R)
+{ register TERM T;
+  register int I;
+  TERM TT; 
+  ri.r=R; 
+  T=TT=stackterms(REALSIZE);
+  for(I=0;I<REALSIZE;I++)
+   { name(T)=INTT ; ival(T)=ri.ir[I];next_br(T);} 
+  return mkfunc(REALT,TT);
+}
+
+GLOBAL REAL realval(register TERM T)
+{ register int I;
+  if(name(T)!=REALT) ARGERROR();
+  T=son(T);
+  for(I=0; I<REALSIZE; I++)
+    { if(name(T)!=INTT) ARGERROR();
+      ri.ir[I]=ival(T); next_br(T);
+    }
+  return ri.r;
+}
+#endif
+
+#if LONGARITH
+GLOBAL TERM mklong(LONG L)
+{ TERM T,TT; int I;
+  li.l=L; 
+  TT=T=stackterms(LONGSIZE);
+#if !MSC
+  for(I=0; I<LONGSIZE; I++) 
+   { name(T)=INTT ; ival(T)=li.il[I];next_br(T);}
+#endif
+#if MSC
+#if LONGSIZE !=2
+   Please change the following lines
+#endif
+   name(T)=INTT ; ival(T)=li.il[0] ; next_br(T); 
+   name(T)=INTT ; ival(T)=li.il[1] ;
+#endif
+  return mkfunc(LONGT,TT);
+}
+
+GLOBAL LONG longval(register TERM T)
+{ register int I;
+  if(name(T)!=LONGT) ARGERROR();
+  T=son(T);
+#if !MSC
+  for(I=0; I<LONGSIZE; I++)
+    { if(name(T)!=INTT) ARGERROR();
+      li.il[I]=ival(T); next_br(T);
+    }
+#endif
+#if MSC
+#if LONGSIZE !=2
+   Please change the following lines
+#endif
+    if(name(T) !=INTT) ARGERROR();
+    li.il[0]=ival(T); next_br(T);
+    if(name(T) !=INTT) ARGERROR();
+    li.il[0]=ival(T);
+#endif
+  return li.l;
+}
+#endif
+/**********************************************************
+*                                                         *
+*  STATISTICS                                             *
+*                                                         *
+**********************************************************/
+
+LOCAL int PERCENT;
+
+LOCAL void wtotal(register string S, register int MAX)
+{ ws(S); wi(MAX); PERCENT=MAX/100; }
+
+LOCAL void wpercent(register string S, register int N)
+{ ws(S); wi(N);
+  ws(" ("); wi(N/PERCENT);ws("%)"); 
+}
+
+#define helpunit 1
+
+/* evaluable predicate stats */
+GLOBAL void DOSTATS (void)
+{ int RN; TERM T; 
+  int I;
+  extern TRAIL TRAILEND,BASETRAIL;
+  ws("\nProlog Execution Statistics:\n");
+  RN=0;
+  for(I=0;I<=MAXARITY;I++)
+   { T=freelist[I]; while(non_nil_term(T)) { RN+=I; T=son(T); } }
+
+  wtotal("\nNodes: ",MAX_TERMS);
+  wpercent(" Stack: ",(int)(GLOTOP-BASETERM)-1);
+  wpercent(" Heap: ",MAX_TERMS-(int)(HEAPTOP-BASETERM));
+  wpercent(" Released: ",RN);
+
+  wtotal("\nAtoms: ",MAX_ATOMS);
+  wpercent(" Stack: ",MAX_ATOMS-(int)(ATOMSTOP/atom_units(1))-1);
+  wpercent(" Heap: ",(int)(ATOMHTOP/atom_units(1)));
+
+  wtotal("\nStrings: ",MAX_STRINGS); 
+  wpercent(" Stack: ",MAX_STRINGS-(int)(STRINGSTOP-BASESTRING)-1);
+  wpercent(" Heap: ",(int)(STRINGHTOP-BASESTRING));
+
+  wtotal("\nEnvironments: ",MAX_ENVS);
+  wpercent(" Used: ",(int)( ENVTOP / helpunit )-1);
+
+  wtotal("\nTrail: ",MAX_TRAILER);
+  wpercent(" Used: ",(TRAILEND-BASETRAIL)/sizeof(int));
+
+  ws("\n");
+}
+

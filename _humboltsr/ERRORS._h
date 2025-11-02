@@ -1,0 +1,66 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     **
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+#define NOERROR              0
+#define ABORTE               1
+#define ARGE                 2
+#define ATOMSPACEE           3
+#define BADARITYE            4
+#define BADCDDE              5
+#define BADCHARE             6
+#define BADDOTE              7
+#define BADEXPE              8
+#define BADKETE              9
+#define BADTYPE              10
+#define CALLE                11
+#define COMMENTE             12
+#define DEPTHE               13
+#define DIV0E                14
+#define EOFE                 15
+#define FRAMESPACEE          16
+#define IOERROR              17
+#define LOCALSPACEE          18
+#define NEEDOPE              19
+#define NEEDQUOTEE           20
+#define NEEDRANDE            21
+#define NUMBERSYNE           22
+#define NVARSE               23
+#define PRECE                24
+#define PROGFAILE            25
+#define READNESTE            26
+#define READSTACKE           27
+#define STDFUNCARGE          28
+#define SYSPROCE             29
+#define TRAILSPACEE          30
+#define UNDEFFUNCE           31
+#define VARSPACEE            32
+#define WIERDCHE             33
+#define aSTRINGSPACEE        34
+#define FPEXCEPTE            35
+#define CANTCR               36
+#define CANTOP               37 
+#define NOTOPEN              38
+#define ISTTYE               39
+#define TOMANY               40
+#define CUROUT               41
+#define CURINP               42
+#define ONLOUT               43 
+#define ONLINP               44
+#define CODESPACEE           45
+#define LABELSPACEE          46
+#define UNDEFLABEL           47
+
+

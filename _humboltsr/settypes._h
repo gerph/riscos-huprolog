@@ -1,0 +1,9 @@
+settype ATOMS Text 
+settype ERRORS Text 
+settype FILES Text 
+settype MANAGER Text 
+settype MAXVARS Text 
+settype SYSTEMS Text 
+settype TYPES Text 
+settype WINDOW Text 
+*quit

@@ -1,0 +1,124 @@
+struct { int dummy ; } __extradata;
+
+#include   <stdio.h>
+#include   <stdlib.h>
+#include   <kernel.h>
+
+static char *opentab[] = { "r", "w" "r+" };
+static int  unixio_raw = 1;
+static int  activetab[_SYS_OPEN];
+
+#define SETUP if( unixio_raw ) setup_unixio()
+
+static void setup_unixio(void)
+{
+int i;
+    for( i = 0; i < _SYS_OPEN; ++i )
+       activetab[i]=0;
+/*    setvbuf( stdin , NULL, _IONBF, (size_t)0 );
+    setvbuf( stdout , NULL, _IONBF, (size_t)0 );
+    setvbuf( stderr , NULL, _IONBF, (size_t)0 ); */
+    unixio_raw = 0;
+}
+
+
+int open(char *name, int mode)
+{
+FILE  *hndle;
+      SETUP;
+      if( mode < 0 || mode > 2 )
+          return -1;
+      hndle = fopen( name, opentab[mode] );
+      if( hndle == NULL )
+          return -1;
+      setvbuf( hndle, NULL, _IONBF, (size_t)0 );
+      return hndle - __iob;
+}
+
+int creat(char *name, int access)
+{
+
+FILE  *hndle;
+      SETUP;
+      hndle = fopen( name, "w+" );
+      if( hndle == NULL )
+          return -1;
+      setvbuf( hndle, NULL, _IONBF, (size_t) 0 );
+      return hndle - __iob;
+}
+
+    
+int close(int strmno)
+{
+       SETUP;
+       return fclose( &__iob[strmno] );
+}
+
+int unlink(char *name)
+{
+       return remove( name );
+}
+
+int isatty(int strmno)
+{
+FILE  *hndle;
+       SETUP;
+       hndle = &__iob[strmno];
+       return hndle == stdin || hndle == stdout || hndle == stderr;
+}
+
+int write(int strmno, char *buf, int len)
+{
+FILE  *hndle;
+int   written;
+      SETUP;
+      hndle = &__iob[strmno];
+      written = (int) fwrite( buf, (size_t) 1, (size_t) len, hndle );
+      if( fflush(hndle) )
+          return -1;
+      return written;
+}
+
+
+
+int read(int strmno, char *buf, int len)
+{
+FILE  *hndle;
+int   readden;
+int   i = 0;
+char  *ret;
+
+      SETUP;
+      hndle = &__iob[strmno];
+      if( hndle == stdin ) {
+        if( fgets( buf, len, stdin ) == NULL )
+          readden = 0;
+        else
+          readden = strlen( buf );
+      } else {
+        readden = (int) fread( buf, (size_t) 1, (size_t) len, hndle );
+      }
+
+      if( ferror( hndle ) )
+          return -1;
+      else
+          return readden;
+
+}
+
+int fseektab[]={ SEEK_SET, SEEK_CUR, SEEK_END };
+
+int lseek(int strmno, long position, int whence)
+{
+FILE *hndle;
+     SETUP;
+     hndle = &__iob[strmno];
+     return fseek( hndle, position, fseektab[whence] );
+}
+
+void prt(char *s)
+{
+     fputs( s, stderr );
+}
+
+

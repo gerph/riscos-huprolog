@@ -1,0 +1,45 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     **
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors    C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+
+/*
+**  includefile "window.h"
+**
+**  last edition: (md) 11.10.89
+*/
+
+#define WIN        int
+#define STDWIN     ((int)0)
+#define NOWINDOW   ((int)-1)
+
+#define REVERSE    ((byte)0x01)
+#define UNDERLINE  ((byte)0x02)
+#define BLINK      ((byte)0x04)
+#define BOLD       ((byte)0x08)
+#define NORMAL     ((byte)0x00)
+
+extern WIN w_create(/* byte x,y,xl,yl ; char *name ; byte attr */);
+extern void w_remove(/* WIN w */);
+extern void w_up(/* WIN w */);
+extern void w_puts(/* WIN w ; char *str */);
+extern int  w_gets(/* WIN w ; char *buf ; int maxlen */);
+extern void w_cls(/* WIN w */);
+extern void w_gotoxy(/* WIN w ; byte xpos,ypos */);
+extern void w_scr_refresh();
+extern void w_init();
+extern void w_exit();
+
+

@@ -1,0 +1,955 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     **
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+#include <setjmp.h>
+
+#include "systems.h"
+#include "types.h"
+#include "errors.h"
+#include "atoms.h"
+#include "files.h"
+
+/*
+ 
+EVALUABLE PREDICATES
+
+*/
+
+
+IMPORT int BCT ;               /* from execute.c       */
+IMPORT ATOM GetAtom();          /* from atomtable.c     */
+IMPORT boolean INTRES();        /* from unify.c         */
+IMPORT ENV NEWENV();            /* from unify.c         */
+IMPORT void KILLSTACKS();       /* from unify.c         */
+IMPORT boolean DOFASSIGN();
+IMPORT void DOABOLISH();        /* from retract.c       */
+IMPORT boolean FERRORFLAG;      /* from files.c         */
+#ifdef ARCHY
+IMPORT boolean SYNCLFLAG;       /* from io.c */
+#endif
+IMPORT boolean ECHOFLAG,HALTFLAG,OCHECK;
+IMPORT boolean WARNFLAG,TRACING,SPYTRACE;
+IMPORT boolean aSYSMODE,REDUCEFLAG;
+IMPORT boolean ENAB_INTR;
+IMPORT int SPYING;
+IMPORT ENV E;
+IMPORT ENV CHOICEPOINT;  /* from execute.c       */
+IMPORT void DOVERSION();
+IMPORT void DOOP();             /* from atomtabl.c      */
+IMPORT void ARGERROR(),ERROR(),ABORT(),SYSTEMERROR(); /* from linebufffer.c */
+IMPORT void REGET();
+IMPORT file OpenFile();        /* from files.c */
+IMPORT void CloseFile();     
+IMPORT void LISTOUT();         /* from writeout.c */
+IMPORT void DOPUT(),DOCLS();   /* from inout.c */
+IMPORT void DOGOTOXY(),DOTAB(),DOSKIP();
+IMPORT ENV TRACE_GOON;           /* from writeout.c      */
+IMPORT void DOPRIVATE(),DOHIDE();
+IMPORT void DOASSERT(),DOASSA();          /* from assert.c        */
+IMPORT boolean DOANCESTORS(),DOAPPEND(),DOMEMBER();
+IMPORT boolean DOSAVE();
+IMPORT void STARTATOM(),ATOMCHAR();
+IMPORT string NEWATOM;
+IMPORT boolean EVENT;
+IMPORT jmp_buf error_label;              /* from prolog.c        */
+IMPORT int ERRORFLAG;           /* the current error no if any */
+IMPORT boolean RES;
+IMPORT ATOM LOOKUP(),LOOKATOM(),copyatom(),atom();
+IMPORT boolean CallUser();               /* from usereval.c */
+IMPORT boolean DOCONSULT();
+IMPORT boolean xWINDOW_ON;
+IMPORT void wq();
+IMPORT TERM READIN();
+IMPORT boolean DOTIME(),DOTIMER(),DOGET0(),DOGET(),DOASK();
+IMPORT boolean DOSEE(), DOSEEN(), DOTELL(),DOOPEN(),DOCLOSE();
+IMPORT boolean DOREAD();
+IMPORT boolean LINEENDED(),FILEENDED(),DONAME(),DOIS();
+IMPORT boolean DOACOMP(),DODASS(),DOREDUCE(),DOCLAUSE();
+IMPORT boolean DORETRACT(),DOENSURE(),DOSEEK();
+IMPORT boolean DOPEEK(),DOPOKE();
+IMPORT boolean islist();
+IMPORT boolean UserAbort;
+IMPORT void ws(),WRITEOUT(),DISPLAY(),LONG_JMP();
+IMPORT boolean UNIFY();
+IMPORT int INTVALUE();
+#if WINDOWS
+IMPORT char t_rc();
+#endif
+#if DBASE3
+IMPORT boolean DOOPENDBF(),DOCLOSEDBF(),DOREADDBF();
+IMPORT boolean DOWRITEDBF(),DOSEEKDBF(),DOERASEDBF();
+#endif
+IMPORT void setinfile(),setoutfile(),getinfile(),DOSTATS(),getoutfile();
+IMPORT int ARGC;
+IMPORT char **ARGV;
+IMPORT TERM HEAPTOP,GLOTOP;
+IMPORT ATOM ATOMSTOP,ATOMHTOP;
+IMPORT ENV ENVTOP;
+IMPORT TRAIL TRAILEND;
+IMPORT int RETURN_CODE;
+
+#if SYMBOLARITH
+IMPORT TERM SUBSTITUTION();
+#endif
+
+#if !CPM
+#if !RISCOS
+IMPORT putenv();
+#endif
+IMPORT char *getenv();
+IMPORT boolean call_system();            /* from systems.c       */
+#endif
+
+TERM A0,A1,A2,A3;            /* global Arguments for all evaluable p. */
+
+#define set_spytrace()   {if(SPYTRACE= (SPYING || TRACING))EVENT=true;}
+
+GLOBAL void CHECKATOM(register TERM A)
+{ if(name(A)<NORMATOM || arity(name(A))) ARGERROR();
+}
+
+GLOBAL boolean isatom(register TERM T)
+{ return name(T)>=NORMATOM && arity(name(T))==0; }
+
+GLOBAL void TESTATOM(register ATOM A, register TERM T)
+{ if(name(T)!=A) ARGERROR(); }
+
+#if !CPM
+LOCAL boolean DOGETENV(void)
+{
+    register char *envp;
+    CHECKATOM(A1);
+    if(envp=getenv(tempcopy(name(A1))))
+    return UNI(A0,mkatom(LOOKUP(envp,0,false)));
+    else return false;
+}
+#if !P8000 && !RISCOS
+LOCAL void DOPUTENV(void)
+{
+    if(isatom(A0) && isatom(A1))
+    {
+        register char *s;
+        STARTATOM();
+        s=tempcopy(name(A0)); while(*s)ATOMCHAR(*s++);
+        ATOMCHAR('=');
+        s=tempcopy(name(A1)); while(*s)ATOMCHAR(*s++);
+        ATOMCHAR('\0');
+        putenv(NEWATOM); /* -- problematisch -- md */
+    }
+    else ARGERROR();
+}
+#endif
+#endif
+
+
+LOCAL boolean DODICT(boolean SYSTEM)
+{ 
+    register ATOM A=nil_atom;
+    register TERM T=nil_term;
+    for (A=GetAtom(nil_atom);non_nil_atom(A);A=GetAtom(A))
+    {   
+        register TERM Q; 
+        if((system(A) && !SYSTEM) || (SYSTEM && !system(A)))
+            continue;
+        Q=mk2sons(LOOKATOM(A,0),nil_term,INTT,(TERM)arity(A));
+        if(non_nil_term(T)) T=mk2sons(DIVIDE_2,Q,CONS_2,T);
+        else T=mk2sons(DIVIDE_2,Q,NIL_0,nil_term);
+    }
+    if(non_nil_term(T)) return UNI(A0,mkfunc(CONS_2,T));
+    return UNI(A0,mkatom(NIL_0));
+}
+
+LOCAL int compare( TERM A,  TERM B, int DEPTH)
+{ 
+    int N;
+    ATOM AA,BB;
+#if REALARITH
+    REAL R;
+#endif
+#if LONGARITH
+    LONG L;
+#endif
+    int i,aar;
+#if REALARITH
+#define realret(expr) { R=expr; if(R < (REAL)0) return -1;\
+                                else return  (R > (REAL)0); \
+                       }
+#endif   
+#if LONGARITH
+#define longret(expr) { L=expr; if(L < (LONG)0) return -1;\
+                                else return  (L > (LONG)0); \
+                       }   
+#endif
+    if(DEPTH <=0) ABORT(DEPTHE);
+    deref(A); deref(B);
+    if((AA=name(A))==UNBOUNDT)
+        if(name(B)==UNBOUNDT) 
+            return 0;
+        else return -1;
+    else if(AA >=NORMATOM)
+    { STRING AIDX,BIDX; char CA,CB;
+        if((BB=name(B)) < NORMATOM) return 1;
+        AIDX=longstring(AA); BIDX=longstring(BB);
+        for(;;) 
+         { CA=repchar(AIDX); CB=repchar(BIDX);
+           if(CA || CB)
+             if(CA==CB) { AIDX++; BIDX++; continue; }
+             else return CA-CB;
+           else break;
+         }   
+        aar=arity(name(A)); /*==arity(name(B)) */
+        A=son(A); B=son(B);
+        N = 0;
+        for(i=0;i < aar && ((N=compare(A,B,DEPTH-1))==0) ; i++)
+        { 
+            next_br(A);next_br(B);
+        }
+        if(N) return N;
+        if(A) 
+            if(B) return 0; 
+            else return 1;
+        else 
+            if(B) return -1; 
+            else return 0;
+    }
+    else if(AA==INTT )
+    {
+        if((BB=name(B))==UNBOUNDT) return 1;
+        if(BB==INTT) return ival(A)-ival(B);
+#if LONGARITH
+        else if(BB==LONGT){longret(ival(A)-longval(B));}
+#endif
+#if REALARITH
+        else if(BB==REALT){realret(ival(A)-realval(B));} 
+#endif
+        else return -1;
+    }
+#if LONGARITH
+    else if(AA==LONGT)
+    {
+        if((BB=name(B))==UNBOUNDT) return 1;
+        else if(BB==INTT) {longret(longval(A)-ival(B));}
+        else if(BB==LONGT){longret(longval(A)-longval(B));}
+#if REALARITH
+        else if(BB==REALT){realret(longval(A)-realval(B));} 
+#endif
+        else return -1;
+    }
+#endif
+#if REALARITH
+    else if(AA==REALT )
+    {
+        if((BB=name(B))==UNBOUNDT) return 1;
+        else if(BB==INTT) {realret(realval(A)-ival(B));}
+#if LONGARITH
+        else if(BB==LONGT){realret(realval(A)-longval(B));}
+#endif
+        else if(BB==REALT){realret(realval(A)-realval(B));} 
+        else return -1;
+    }
+#endif
+    else SYSTEMERROR("compare");        
+#if REALARITH
+#undef realret
+#endif
+#undef longret
+  return 0; /* never reached, keeps lint silent */
+}
+
+
+LOCAL boolean DOFUNCTOR (void)
+{ 
+    TERM  X, Y;
+    ATOM A;
+    int  I, M;
+  
+    A=name(A0); 
+    if(is_number(A)) 
+            return UNI(A0,A1) && INTRES(A2,0);
+    if(A==UNBOUNDT)
+      { M=INTVALUE(A2);
+        if(isatom(A1) && M>=0)
+          { X=Y=stackterms(M);
+            for(I=0;I<M;I++)
+              { name(X)=UNBOUNDT; son(X)=nil_term; next_br(X);}
+            return UNI(A0,mkfunc(LOOKATOM(name(A1),M),Y)); 
+          }
+        if(name(A1)==INTT && M==0) 
+            return INTRES(A0,ival(A1));
+        if((name(A1)==REALT || name(A1)==LONGT) && M==0)
+            return UNI(A0,A1);
+        ARGERROR();
+      }     
+    return INTRES(A2,(int)arity(A)) && UNI(A1,mkatom(LOOKATOM(A,0)));
+}
+
+LOCAL boolean DOARG (void)
+{ 
+    register TERM  X;
+    register int  I, N;
+    
+    if(name(A0)!=INTT || name(A1)< NORMATOM ) ABORT(ARGE);
+    N= (int)ival(A0);
+    if(N<1 || N> arity(name(A1))) 
+        ABORT(ARGE);
+    X=son(A1);
+    for(I=2; I<=N; ++I) next_br(X);
+    return UNI(A2,X);
+}
+
+LOCAL int LISTATOM(ATOM A)
+{ 
+    register CLAUSE CL; register TERM X; int N=0;
+  
+    if(class(A) !=NORMP) return 0;
+    if((system(A) || hide(A) || private(A)) && !DEBUGFLAG) return 0;
+    if(A==REPEAT_0) return 0;
+/*    if(*tempcopy(A)== '$' && !DEBUGFLAG) return 0; */
+    for(CL=clause(A);non_nil_clause(CL);CL=nextcl(CL))
+    { 
+        LISTOUT(head(CL));
+        if(name(X=body(CL)))
+        {   register notfirst =0;
+            ws(":-");
+            for(;;) 
+            { 
+                while(name(X)==GOTO_1) X=son(X);
+                if(name(X)==nil_atom) break;
+                if(notfirst++) ws(",");
+                ws("\n    ");LISTOUT(X);next_br(X);
+                if(UserAbort) return(N);
+            }
+        }
+        ws(".\n");
+        N++;
+        if(UserAbort) return(N);
+    }
+    return N;
+}
+
+LOCAL void DOLISTING(void)
+{ 
+    ATOM A,AA;
+    int N=0,i;
+  
+    if(isatom(A0))
+    {
+        if(name(A0)!=ALL_0 )
+        {   A=name(A0);
+            for(i=0;i<MAXARITY;++i)
+            { AA=LOOKATOM(A,-i);
+              if(non_nil_atom(AA) && isheapatom(AA)) N +=LISTATOM(AA);
+            }
+            if(WARNFLAG && N==0 )
+            { ws("WARNING: no clause for relation ");
+              wq(name(A0)); ws("\n"); 
+            }
+        }
+        else 
+        { /* name(A0)==ALL_0 */
+          for(A=GetAtom(nil_atom);non_nil_atom(A);A=GetAtom(A)) 
+            N+=LISTATOM(A); 
+        }
+    }
+    else 
+    { 
+        /* ! isatom(A0) */
+        if(non_nil_atom(A=atom(A0))) 
+            if(non_nil_atom(A) && isheapatom(A)) N+=LISTATOM(A); 
+        if(WARNFLAG && N==0)
+        {
+            ws("WARNING: no clause for relation ");
+            wq(A);ws("/");wi(arity(A)); ws("\n"); 
+        } 
+    } 
+}
+
+
+LOCAL void DOSPY(boolean SPYMODE)
+{ 
+    ATOM A;
+    int i;
+    if(isatom(A0)) 
+        if(name(A0) !=ALL_0)
+            for(i=0;i<=MAXARITY;i++)
+            {
+                A=LOOKATOM(name(A0),-i);
+                if(non_nil_atom(A)) 
+                {
+                    A=copyatom(A);
+                    if(!spy(A) && SPYMODE) SPYING++;
+                    if(spy(A) && !SPYMODE) SPYING--;
+                    if(SPYMODE) setspy(A); else setnotspy(A);
+                }
+            }
+        else /* name(A0)==ALL_0 */
+        {
+            for(A=GetAtom(nil_atom);non_nil_atom(A);A=GetAtom(A))
+            {
+                if(!spy(A) && SPYMODE) SPYING++;
+                if(spy(A) && !SPYMODE) SPYING--;
+                if(SPYMODE) setspy(A); else setnotspy(A);
+            }
+        }
+    else
+    { 
+        A=atom(A0); 
+        if(WARNFLAG && clause(A)==nil_clause) 
+        {       
+            ws("WARNING: no clause for relation "); 
+            wq(A); ws("/"); wi(arity(A));
+        }
+        A=copyatom(A);  
+        if(!spy(A) && SPYMODE) SPYING++;
+        if(spy(A) && !SPYMODE) SPYING--;
+        if(SPYMODE) setspy(A); else setnotspy(A);
+    }
+    set_spytrace();
+}
+
+
+GLOBAL boolean DOEQUAL(register TERM X0, register TERM X1, 
+                       REGISTER int DEPTH)
+{   register int i,aar;
+    register ATOM A;
+
+    if(DEPTH <=0) ABORT(DEPTHE);
+    deref(X0); deref(X1);
+    if((A=name(X1))!=name(X0)) return false;
+    if(A==INTT) return ival(X0)==ival(X1);
+    if(A==UNBOUNDT) return X0==X1;
+    aar=arity(A); 
+    for(i=0,X1=son(X1),X0=son(X0);i<aar;i++,next_br(X1),next_br(X0))
+      if(! DOEQUAL(X0,X1,DEPTH-1)) return false;
+    return true;
+}
+
+GLOBAL boolean ground(register TERM ARG, register int DEPTH)
+{   register int aar;
+    register ATOM A;
+    deref(ARG);
+    if(DEPTH <=0) ABORT(DEPTHE);
+    if((A=name(ARG))==UNBOUNDT) return false;
+    if(A<NORMATOM)  return true;
+    aar=arity(A);
+    ARG=son(ARG);
+    while(aar-- > 0)
+    {
+        if(! ground(ARG,DEPTH-1)) return false;
+        next_br(ARG);
+    }
+    return true;
+}
+
+LOCAL boolean DOUNIV(void)
+{
+    ATOM A;
+    TERM X,Y,T;
+    int ARITY;
+    A=name(A0); 
+    if(A==UNBOUNDT)
+       {  for(T=A1,ARITY= -1; name(T)==CONS_2; ARITY++) T=arg2(T); 
+          if(name(T)!=NIL_0 || ARITY<0) ARGERROR();
+          if(ARITY==0) return UNI(A0,son(A1));
+          T=arg1(A1);
+          CHECKATOM(T);
+          Y=mkfunc(LOOKATOM(name(T),ARITY),stackterms(ARITY));
+          X=son(Y); T=arg2(A1);
+          while(ARITY--> 0)
+           { name(X)=UNBOUNDT; UNI(X,son(T));next_br(X); T=arg2(T); }
+          return UNI(Y,A0);
+       }
+    if(A<NORMATOM)
+      return UNI(A1,mkfunc(CONS_2,mk2sons(A,son(A0),NIL_0,nil_term)));
+    /* default */ 
+    X=Y=mkfunc(CONS_2,mk2sons(LOOKATOM(A,0),nil_term,NIL_0,nil_term));
+    ARITY=arity(A);
+    T=son(A0);
+    while(ARITY-->0)
+       { Y=br(son(Y)); 
+         name(Y)=CONS_2; son(Y)=mk2sons(UNBOUNDT,nil_term,NIL_0,nil_term);
+         UNI(son(Y),T);
+         next_br(T);
+       }
+    return UNI(X,A1);
+}  /* univ */
+
+LOCAL boolean DOSORT(boolean delete)
+{
+    register TERM T,TT,S;
+    REGISTER TERM Res;
+    register int c;
+    if(!islist(A0,false)) ARGERROR();
+    Res=mkatom(NIL_0);
+    S=A0;
+    while(name(S)==CONS_2)
+    {   /* insert arg1(S) */
+        T=arg1(S);S=arg2(S);
+        TT=Res; c=1; /* set c to a value !=0 ! */
+        while(name(TT)==CONS_2 && (c=compare(arg1(TT),T,MAXDEPTH)) < 0)
+            TT=arg2(TT);
+        if(delete && c==0) continue;
+        /*
+        Temp=mk2sons(UNBOUNDT,nil_term,name(TT),son(TT));
+        name(TT)=CONS_2;
+        son(TT)=Temp;
+        UNI(Temp,T);
+        */
+        son(TT)=mk2sons(name(T),son(T),name(TT),son(TT));
+        name(TT)=CONS_2;
+    }
+    return UNI(A1,Res);
+}
+
+/*
+**
+**  Flaghandling  on/off
+**
+*/
+
+LOCAL void SetFlag(boolean *FLAG)
+{ ATOM A;
+  A=name(A0);
+  if(A==ON_0) *FLAG=true;
+  else if(A==OFF_0) *FLAG=false;
+    else if(A==UNBOUNDT)   
+              if(*FLAG)  UNI(A0,mkatom(ON_0));
+              else UNI(A0,mkatom(OFF_0));
+      else ARGERROR();
+}
+
+LOCAL boolean DOCURATOM(boolean pred)
+/* current_predicate */
+{
+    ATOM A;
+    TERM T;
+    ENV NE,OC;
+
+    OC=CHOICEPOINT;
+    if (!BCT) A=nil_atom; else A=(ATOM)BCT;
+    while(non_nil_atom(A=GetAtom(A)))
+    {
+        BCT=(int)A;
+        if(pred && (class(A) !=NORMP ||  clause(A)==nil_clause ||
+                     system(A))) continue;
+        NE=NEWENV(0);CHOICEPOINT=NE;
+        T=mk2sons(LOOKATOM(A,0),nil_term,INTT,(TERM)arity(A));
+        if(UNI(mkfunc(DIVIDE_2,T),A0))
+        { 
+            CHOICEPOINT=OC; return true; 
+        }
+        KILLSTACKS(NE);
+    }
+    return false;
+}
+
+
+LOCAL boolean DOCUROP(void)
+{
+    ATOM A,P;
+    ENV NE,OC;
+
+    OC=CHOICEPOINT;
+    if (!BCT) A=nil_atom; else A=(ATOM)BCT;
+    while(non_nil_atom(A=GetAtom(A)))
+    {
+        switch(oclass(A))
+        {
+            case XFO:   P=XF_0;  break;
+            case FXO:   P=FX_0;  break;
+            case XFXO:  P=XFX_0; break;
+            case YFO:   P=YF_0;  break;
+            case FYO:   P=FY_0;  break;
+            case XFYO:  P=XFY_0; break;
+            case YFXO:  P=YFX_0; break;
+            default:    continue;
+        }
+        BCT=(int)A;
+        NE=NEWENV(0);CHOICEPOINT=NE;
+        if(   UNI(A0,mkint(oprec(A))) &&
+              UNI(A1,mkatom(P))   &&
+              UNI(A2,mkatom(LOOKATOM(A,0)))
+          )
+        { CHOICEPOINT=OC; return true; }
+        KILLSTACKS(NE);
+    }
+    return false;
+}
+
+LOCAL void copy(register char *s)
+{
+    while(*s)
+        ATOMCHAR(*s++);
+    ATOMCHAR(' ');
+}
+
+#if !CPM
+LOCAL boolean DOSYSTEM(void)
+{
+    TERM T;
+    ATOM A;
+
+    STARTATOM(); /* init NEWATOM */
+    while(name(A0)==CONS_2)
+    {
+        T=arg1(A0); A=name(T); A0=arg2(A0);
+        if(A==INTT) copy(itoa(ival(T)));
+#if LONGARITH
+        else if(A==LONGT) copy(ltoa(longval(T)));
+#endif
+#if REALARITH
+        else if(A==REALT) copy(ftoa(realval(T)));
+#endif
+        else { CHECKATOM(T); copy(tempcopy(name(T))); }
+    }
+    TESTATOM(NIL_0,A0);
+    ATOMCHAR('\0'); /* terminate NEWATOM */
+    return call_system(NEWATOM);
+}
+#endif
+    
+boolean setval(int *x)
+{
+    if(name(A0)==UNBOUNDT) return INTRES(A0,*x);
+    if(name(A0)==INTT){*x=ival(A0); return true;}
+    ARGERROR();
+
+}
+
+LOCAL void copy_error_label(int *from, int *to)
+{   int size=sizeof(jmp_buf)/sizeof(int); 
+    while(size-- > 0) *to++= *from++;
+}
+
+
+TERM CALLX;
+ENV CALLXENV;
+
+void CALLEVALPRED (TERM X, ENV ENVP)
+{ 
+    ATOM NAME;
+    int  A;
+    auto jmp_buf old_error_label;
+    CALLX=X; CALLXENV=ENVP;
+    RES=true;
+    copy_error_label(error_label,old_error_label);
+    setjmp(error_label);
+    if(ERRORFLAG) { RES=false; goto exit; }
+
+    E=ENVP; BE=base(ENVP);
+    deref(X);
+    NAME=name(X);
+    A=arity(NAME); 
+    X=son(X);
+    if(1<=A) 
+    { A0=X; deref(A0); next_br(X); 
+      if(2<=A) 
+      { A1=X; deref(A1); next_br(X); 
+        if(3<=A) 
+        { A2=X; deref(A2); next_br(X); 
+          if(4<=A) 
+          { A3=X; deref(A3);  
+            if (4<A) SYSTEMERROR("CALLEVALPRED.0");
+          }
+        }
+      }
+    }
+
+    switch (NAME) 
+    { 
+#if !CPM
+    /* date/time handling */
+    case TIME_3:        
+    case DATE_3:       
+    case WEEKDAY_1:     RES=DOTIME(NAME); break;
+    case TIMER_1:       RES=DOTIMER(); break;
+#endif
+
+    /* input/output predicates */
+    case OP_3:           DOOP();break;
+
+    case READ_1:        RES=UNI(READIN(),A0); break;
+    case READ_2:        RES=DOREAD();break;
+    case WRITE_1:       WRITEOUT(A0,false); break;
+    case WRITEQ_1:      WRITEOUT(A0,true); break;
+    case DISPLAY_1:     DISPLAY(A0);break;
+    case GET0_1:        RES=DOGET0();break;
+    case GET_1:         RES=DOGET();break;
+    case UNGET_0:       REGET();break;
+    case SKIP_1:        DOSKIP();break;
+    case PUT_1:         DOPUT();break;
+    case CLS_0:         DOCLS(); break;
+    case NL_0:          ws("\n"); break;
+    case TAB_1:         DOTAB();break;
+    case GOTOXY_2:      DOGOTOXY(); break; 
+    case ASK_1:         RES=DOASK();break;
+
+    case TTYREAD_1:    
+    case TTYGET0_1:   
+    case TTYGET_1:   
+    case TTYSKIP_1: 
+    case TTYASK_1:      setinfile();
+                        switch(NAME)
+                        {
+                          case TTYREAD_1:  RES=UNI(READIN(),A0); break;
+                          case TTYGET0_1:  RES=DOGET0();break;
+                          case TTYGET_1:   RES=DOGET();break;
+                          case TTYSKIP_1:  DOSKIP();break;
+                          case TTYASK_1:   RES=DOASK();break;
+                        }
+                        getinfile();
+                        break;
+    case TTYWRITE_1:    
+    case TTYPUT_1:     
+    case TTYCLS_0:    
+    case TTYNL_0:    
+    case TTYTAB_1:  
+    case TTYGOTOXY_2:   setoutfile();
+                        switch(NAME)
+                        {
+                          case TTYWRITE_1:  WRITEOUT(A0,false); break;
+                          case TTYPUT_1:    DOPUT();break;
+                          case TTYCLS_0:    DOCLS(); break;
+                          case TTYNL_0:     ws("\n"); break;
+                          case TTYTAB_1:    DOTAB();break;
+                          case TTYGOTOXY_2: DOGOTOXY(); break; 
+                        }
+                        getoutfile();
+                        break;
+
+    case EOLN_0:        RES=LINEENDED(); break;
+    case EOF_0:         RES=FILEENDED(); break;
+    case SEE_1:         RES=DOSEE();break;
+    case SEEING_1:      RES=UNI(A0,mkatom(FLOGNAME(inputfile))); break;
+    case SEEN_0:        RES=DOSEEN();break;
+                        /* CloseFile(inputfile);A0=mkatom(USER_0);
+                        RES=DOSEE();break; */
+    case TELL_1:        RES=DOTELL();break;
+    case TELLING_1:     RES=UNI(A0,mkatom(FLOGNAME(outputfile))); break;
+    case TOLD_0:        CloseFile(outputfile);A0=mkatom(USER_0);
+                        RES=DOTELL();break;
+    case OPEN_1:        RES=DOOPEN();break;
+    case CLOSE_1:       RES=DOCLOSE();break;
+#if !CPM
+    case SEEK_2:        RES=DOSEEK();break;
+#endif
+    case WGET0_1:       
+#if WINDOWS
+                        if(xWINDOW_ON) RES=INTRES(A0,t_rc());
+                        else 
+#endif
+                        RES=DOGET0(); break;
+    case aWINDOW_0:     RES=xWINDOW_ON;break;
+    case FILEE_0:       FERRORFLAG=true;break;
+    case NFILEE_0:      FERRORFLAG=false;break;
+#ifdef ARCHY
+    case SYNCLOSE_0:    SYNCLFLAG=true; break;
+    case NSYNCLOSE_0:   SYNCLFLAG=false;break;
+#endif
+    case FILEE_1:       SetFlag(&FERRORFLAG);break;
+    case CONSULT_1:     RES=DOCONSULT(false);break;
+    case RECONSULT_1:   RES=DOCONSULT(true);break;
+
+    case FASSIGN_2:     RES=DOFASSIGN();break;
+#if !CPM
+    case SYSTEM_1:      RES=DOSYSTEM();break;
+#endif
+    case ARGC_1:        RES=INTRES(A0,ARGC);break;
+    case ARGV_2:        {
+                            int i;
+                            if((i=INTVALUE(A1))<0 || i >=ARGC) 
+                                ERROR(ARGE);
+                            RES=UNI(A0,mkatom(LOOKUP(ARGV[i],0,false)));
+                        }
+                        break;
+#if UNIX
+    case OPSYS_1:       RES=UNI(A0,mkatom(LOOKUP("unix",0,false))); break;
+#endif
+#if RISCOS
+    case OPSYS_1:       RES=UNI(A0,mkatom(LOOKUP("riscos",0,false))); break;
+#endif
+#if MS_DOS
+    case OPSYS_1:       RES=UNI(A0,mkatom(LOOKUP("msdos",0,false))); break;
+#endif
+#if CPM
+    case OPSYS_1:       RES=UNI(A0,mkatom(LOOKUP("cpm",0,false))); break;
+#endif
+#if VMS
+    case OPSYS_1:       RES=UNI(A0,mkatom(LOOKUP("vms",0,false))); break;
+#endif
+    case RESTART_0:     ABORT(NOERROR);break;
+    case ABORT_0:       ABORT(ABORTE); break;
+    case END_0:         HALTFLAG=true; break;
+    case TRACE_1:       SetFlag(&TRACING);set_spytrace();TRACE_GOON=0;
+                        break;
+    case TRACE_0:       TRACING=true; set_spytrace();TRACE_GOON=0;
+                            break;
+    case NOTRACE_0:     TRACING=false; set_spytrace();TRACE_GOON=0;
+                        break;
+    case SPY_1:         DOSPY(true); TRACE_GOON=0; break;
+    case NOSPY_1:       DOSPY(false); TRACE_GOON=0;
+                        break;
+    case ECHO_1:        SetFlag(&ECHOFLAG); break;
+    case DEBUG_1:       SetFlag(&DEBUGFLAG); break;
+    case STATS_0:       DOSTATS(); break;
+    case aINTERRUPT_1:  SetFlag(&ENAB_INTR);
+                        if(ENAB_INTR && UserAbort)EVENT=true;
+                        break;
+    case SYSMODE_1:     SetFlag(&aSYSMODE);break;
+    case REDUCE_1:      SetFlag(&REDUCEFLAG);break;
+#if OCCUR_CHECK
+    case OCHECK_1:      SetFlag(&OCHECK);break;
+#endif
+    case WARN_1:        SetFlag(&WARNFLAG);break;
+    case EXIT_1:        RETURN_CODE=INTVALUE(A0);
+    case HALT_0:        LONG_JMP(999);break;
+    case SAVE_1:        DOSAVE();break;
+
+    /* term manipulation */
+    case LIST_1:        RES=islist(A0,false);break;
+    case STRING_1:      RES=islist(A0,true);break;
+    case COMPOUND_1:    RES=name(A0) > NORMATOM && arity(name(A0));
+                            break;
+#if REALARITH
+    case REAL_1:        RES=name(A0)==REALT;break;
+#endif
+    case NUMBER_1:      RES=is_number(name(A0));break;
+    case ATOMIC_1:      RES=isatom(A0) || is_number(name(A0));break;
+    case NONVAR_1:      RES=name(A0)!=UNBOUNDT; break;
+    case SYS_1:         RES=system(atom(A0));break;
+    case CURATOM_1:     RES=DOCURATOM( false );break;
+    case CURPRED_1:     RES=DOCURATOM( true );break;
+    case CUROP_3:       RES=DOCUROP();break;
+    case NAME_2:        RES=DONAME();  break;
+    case FUNCTOR_3:     RES=DOFUNCTOR();  break;
+    case ARG_3:         RES=DOARG();  break;
+    case UNIV_2:        RES=DOUNIV();break;
+    case MEMBER_2:      RES=DOMEMBER(); break;
+    case APP_3:         RES=DOAPPEND(); break;
+    case SORT_2:        RES=DOSORT(false);break;
+    case SORT0_2:       RES=DOSORT(true);break;
+    case EQUAL_2:       RES=DOEQUAL(A0,A1,MAXDEPTH);break;
+    case NOEQUAL_2:     RES= !DOEQUAL(A0,A1,MAXDEPTH);break;
+    case INVAR_1:       RES= !ground(A0,MAXDEPTH);break;
+    case GROUND_1:      RES=ground(A0,MAXDEPTH);break;
+    case ALT_2:         RES=compare(A0,A1,MAXDEPTH)<0;break;
+    case ALE_2:         RES=compare(A0,A1,MAXDEPTH)<=0;break;
+    case AGT_2:         RES=compare(A0,A1,MAXDEPTH)>0;break;
+    case AGE_2:         RES=compare(A0,A1,MAXDEPTH)>=0;break;
+    case AEQ_2:         RES=compare(A0,A1,MAXDEPTH)==0;break;
+    case ANE_2:         RES=compare(A0,A1,MAXDEPTH)!=0;break;
+
+    /* arithmetic operations, see arith.c */
+    case IS_2:          RES=DOIS(A0,A1);break;
+    case ACOMP_1:       RES=DOACOMP();break;
+    case DASSIGN_2:     RES=DODASS();break;
+    case REDUCE_2:      DOREDUCE(A0,A1,false); break; 
+
+    /* database operations */
+    case DICT_1:        RES=DODICT(false); break;
+    case SDICT_1:       RES=DODICT(true); break;
+
+    case ASSERTA_1:     DOASSA();break;
+    case ARROW_2:       A0=mkfunc(ARROW_2,
+                                    mk2sons(name(A0),son(A0), name(A1),son(A1)));
+    case ASSERT_1:
+    case ASSERTZ_1:     A2=mkatom(END_0);
+                        DOASSERT(false);break;
+    case DBASS_2:
+    case DBASSZ_2:      A2=mkatom(END_0);
+                        DOASSERT(true);break;
+    case DBASSA_2:      A2=mkint(0);
+                        /* no break */
+    case DBASS_3:       DOASSERT(true);break;
+    case LISTALL_0:     A0=mkatom(ALL_0);/* no break */
+    case LISTING_1:     DOLISTING(); break;
+    case CLAUSE_2:      RES=DOCLAUSE(false);break;
+    case CLAUSE_3:      RES=DOCLAUSE(true);break;
+    case RETRACT_1:     RES=DORETRACT(false,false);break;
+    case DBRET_2:       RES=DORETRACT(true,false);break;
+    case RETALL_1:      RES=DORETRACT(false,true);break; 
+    case ABOL_1:        DOABOLISH(1);break;
+    case ABOL_2:        DOABOLISH(2);break;
+    case VERSION_0:     DOVERSION(); break;
+    case PRIVATE_1:     DOPRIVATE();break;
+    case HIDE_1:        DOHIDE();break;
+    case ANCESTORS_1:   RES=DOANCESTORS();break;
+    case ENSURE_3:      RES=DOENSURE();break;
+
+#if !CPM
+    case GETENV_2:      RES=DOGETENV();break;
+#if !P8000 && !RISCOS
+    case PUTENV_2:      DOPUTENV();break;
+#endif
+#endif
+
+#if HELP
+    case HELP_0:        DOHELP(nil_term);break;
+    case HELP_1:        DOHELP(A0);break;
+#endif
+
+#if DBASE3
+    case OPENDBF_2:     RES=DOOPENDBF(A0,A1);break;
+    case CLOSEDBF_1:    RES=DOCLOSEDBF(A0);break;
+    case READDBF_3:     RES=DOREADDBF(A0,A1,A2);break;
+    case WRITEDBF_3:    RES=DOWRITEDBF(A0,A1,A2);break;
+    case SEEKDBF_2:     RES=DOSEEKDBF(A0,A1);break;
+    case ERASEDBF_2:    RES=DOERASEDBF(A0,A1);break;
+#endif
+
+#if HACKY
+    case iCHOICEP_1:    RES=setval(&CHOICEPOINT);break;
+    case iSTACKT_1:     RES=setval(&GLOTOP);break;
+    case iHEAPT_1:      RES=setval(&HEAPTOP);break;
+    case iASTACKT_1:    RES=setval(&ATOMSTOP);break;
+    case iAHEAPT_1:     RES=setval(&ATOMHTOP);break;
+    case iENV_1:        RES=setval(&ENVTOP);break;
+    case iTRAIL_1:      RES=setval(&TRAILEND);break;
+    case iNROFCALLS_2:  RES=INTRES(A0,nrofcalls(atom(A1)));break;
+#endif
+
+#if SYMBOLARITH
+    case SUBST_4:       RES=UNI(A0,SUBSTITUTION(A1,A2,A3)); break;
+#endif
+
+#if CPM
+    case BDOS_3:        RES=INTRES(A2,
+                         bdos(INTVALUE(A0),INTVALUE(A1))); break;
+#endif
+
+#if CPM || HACKY
+    case PEEK_3:        RES=DOPEEK(); break;
+    case POKE_2:        RES=DOPOKE(); break;
+#endif
+
+    default:             
+#if USER
+          RES=CallUser(CALLX);break;
+#endif
+#if !USER
+          ws("\007sorry, this predicate is reserved, ");
+          ws("but not yet implemented\n");
+          ERROR(CALLE);
+#endif
+  }
+  CALLX=nil_term;
+exit:
+  copy_error_label(old_error_label,error_label);
+  return;
+
+}
+
+

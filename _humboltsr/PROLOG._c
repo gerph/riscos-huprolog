@@ -1,0 +1,406 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     **
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+#include <stdlib.h>
+#include <setjmp.h>
+
+#include "systems.h"
+#include "types.h"
+#include "errors.h"
+#include "atoms.h"
+#include "files.h"
+#include "manager.h"
+
+IMPORT void InitIO();                   /* from basicio.c */
+IMPORT void InitAtoms();                /* from atomtable.c */
+IMPORT void InitMemory();               /* from memory.c */
+IMPORT void InitDatabase();             /* from database.c */
+IMPORT void InitdynMem();                  /* from memory.c */
+IMPORT void InitAll();
+#if WINDOWS
+IMPORT void w_init();
+#endif
+#if USER
+IMPORT void InitUser();                  /* from usereval.c   */
+#endif
+
+IMPORT void retractclauses();            /* from retract.c */
+IMPORT TERM READIN();                    /* from readin.c */
+IMPORT int VARCOUNT;                     /* from readin.c */
+IMPORT int IOERRORFLAG;
+IMPORT int ERRORFLAG;
+IMPORT ENV NEWENV();                    /* from unify.c */
+IMPORT void KILLSTACKS();               
+IMPORT void ABORT(),SYSTEMERROR();      /* from linebufffer.c */
+IMPORT file OpenFile();                 /* from files.c */
+IMPORT boolean FileExist();
+IMPORT void FileError();
+IMPORT ENV TRACE_GOON;                   /* from writeout.c */
+IMPORT TERM A0,A2;                       /* from evalpreds.c     */
+IMPORT TERM CALLX;                       /* from eval.c */
+IMPORT ATOM LOOKUP();
+IMPORT void exit();
+IMPORT string s_gotoxy();
+IMPORT TERM mk2sons(),VARTERM(),
+            phy_name(), stackterms();
+IMPORT ATOM copyatom();
+IMPORT CLAUSE ADDCLAUSE();
+IMPORT boolean EXECUTE();
+#if REALARITH
+IMPORT boolean FpAbort;                  /* from arith.c         */
+#endif
+
+/* Variable declarations */
+
+GLOBAL PHASE  MODE;
+LOCAL boolean RST;
+
+#if INITFILE
+GLOBAL string RESTORESTATE=RESFILE;
+#endif
+LOCAL string PROLIB= (string)0;
+
+ENV  E,CHOICEPOINT;
+TERM BE;
+GLOBAL int ARGC;
+GLOBAL char **ARGV;
+int SPYING=0;            /* count spypoints */
+boolean  HALTFLAG=false, 
+         TRACING=false, 
+         SPYTRACE=false,
+         ECHOFLAG=false,
+         DEBUGFLAG=false,
+         OCHECK  =false,  
+         WARNFLAG=true,
+         ENAB_INTR=true,
+         EVENT=false,
+         xWINDOW_ON=false,
+         UserAbort=false,
+         aSYSMODE=false,
+         REDUCEFLAG=true,
+         VERBOSE=true,
+         BOOTING=false,
+         In_Toplevel_Read=false;
+
+
+
+
+
+/* encapsulation of jump to global labels 100,101,999 */
+
+jmp_buf error_label;  /* used also in evalpreds.c */ 
+jmp_buf abort_label;
+LOCAL globaladdr=0;
+
+GLOBAL int RETURN_CODE=0;
+
+GLOBAL void ERRORJMP (void)
+{
+  longjmp(error_label,1); 
+}
+
+GLOBAL void LONG_JMP(int I)
+{
+  longjmp(abort_label,I);
+}
+
+#if !CPM
+#include <signal.h>
+LOCAL void sig_handler(int s)
+{
+  switch(s) {
+#if REALARITH && VMS
+  case SIGFPE:
+         signal(FPEXCEPTE,sig_handler);
+         FpAbort=true;break;
+#endif
+  case SIGINT:
+         signal(SIGINT,sig_handler);
+         EVENT=true; UserAbort=true; 
+  if(MODE!=USERM) LONG_JMP(999);  
+  break;
+#if UNIX || VMS
+  case SIGQUIT: LONG_JMP(999);
+#endif
+  }
+}
+#endif
+
+/*
+   Read and execute clauses from the current file. 
+*/
+
+LOCAL TERM MAKETOPLEVEL(TERM X)
+{ TERM Y;
+    if(name(X)==COMMA_2)
+    { 
+        X=son(X); 
+        return mk2sons(name(X),son(X),GOTO_1, MAKETOPLEVEL(br(X)));
+    }
+    else if(non_nil_term(Y=VARTERM())) 
+            return mk2sons(name(X),son(X),GOTO_1,Y);
+    else return mk2sons(name(X),son(X),nil_atom,nil_term);
+} 
+
+ENV TOPENV;  
+
+LOCAL void TOPLEVEL (PHASE MO, boolean init)
+{ TERM  X;
+  CLAUSE MCL;
+  ATOM filename;
+  ATOM LAST_ASS_ATOM=nil_atom;
+  MODE=MO;
+  HALTFLAG=false;
+  TRACE_GOON=0;
+  switch (MO)
+  { case SYSM:  filename=LOOKUP(PROLIB,0,true); break;
+    case USERM: filename=STDIN_0; break;
+  }
+  if((inputfile=OpenFile(phy_name(filename),read_mode)) < 0)
+  {
+        FLOGNAME(inputfile)=STDIN_0;
+        if(MODE==USERM) inputfile=STDIN;
+        else {CALLX=phy_name(filename);FileError(CANTOP);ABORT(0);}
+  }
+  else 
+      FLOGNAME(inputfile)=copyatom(filename);
+  if((outputfile=OpenFile(phy_name(STDOUT_0),write_mode)) < 0)
+        if(MODE==USERM) outputfile=STDOUT;
+        else {CALLX=phy_name(STDOUT_0);FileError(CANTOP);ABORT(0);}
+  FLOGNAME(outputfile)=STDOUT_0;
+  do
+  {
+    retractclauses();
+    TOPENV=CHOICEPOINT=E=NEWENV(0); BE=base(E);
+    
+    if (init && non_nil_clause(clause(INIT_0))) 
+      { EXECUTE(mkfunc(CALL_1,mkatom(INIT_0)),E); init=0; }
+    else
+    if(MODE==USERM)
+      if(non_nil_clause(clause(TOP_0))) 
+        EXECUTE(mkfunc(CALL_1,mkatom(TOP_0)),E);
+      else 
+        { if(VERBOSE)
+            if (non_nil_clause(clause(PROMPT_0)))
+             { EXECUTE(mkfunc(CALL_1,mkatom(PROMPT_0)),E);
+               KILLSTACKS(TOPENV);
+               TOPENV=CHOICEPOINT=E=NEWENV(0); BE=base(E);
+             }
+            else ws("?-");
+          In_Toplevel_Read=true;X=READIN();In_Toplevel_Read=false; 
+          clause(MAIN_0)=MCL=stackterms(5);
+          name(MCL)=CLAUSET; name(br(MCL))=INTT;
+          nextcl(MCL)=nil_clause; setnvars(MCL,VARCOUNT);
+          name(head(MCL))=MAIN_0; son(head(MCL))=nil_term;
+          name(body(MCL))=GOTO_1; son(body(MCL))=MAKETOPLEVEL(X);
+          if(EXECUTE(mkatom(MAIN_0),E)) {if(VERBOSE)ws("\nyes\n");}
+          else if(VERBOSE)ws("\nno\n");
+        }
+    else { 
+           if(!ECHOFLAG && VERBOSE && MODE!=SYSM)ws("."); 
+           X=READIN();
+           if(name(X)==END_0) HALTFLAG=true;
+           else if(name(X)==QUESTION_1 || name(X)==ARROW_1)
+           {
+                LAST_ASS_ATOM=nil_atom;
+                if(!EXECUTE(mkfunc(CALL_1,son(X)),E) &&
+                   name(X)!=ARROW_1 && WARNFLAG)
+                    ws("WARNING: goal failed during consult/reconsult");
+           }
+           else 
+           {    /* assertz(X) */ 
+                register ATOM A;
+                register CLAUSE CL,CX;
+                
+                if((A=name(X))==ARROW_2) A=name(arg1(X));
+                if((system(A) && !aSYSMODE) || class(A)!=NORMP)
+                    ABORT(SYSPROCE);
+                A=copyatom(A);
+                if(non_nil_clause(CL=clause(A)))
+                {   while(non_nil_clause(CX=nextcl(CL))) CL=CX;
+                    nextcl(CL)=CX=ADDCLAUSE(X);
+                    if(WARNFLAG && LAST_ASS_ATOM !=A)
+                    {
+                        ws("WARNING: new clauses for ");
+                        wq(A);ws("/");wi(arity(A));
+                        ws("\n");
+                    }
+
+                }
+                else clause(A)=CX=ADDCLAUSE(X);
+                nextcl(CX)=nil_clause;
+
+                LAST_ASS_ATOM=A;
+           }
+         }
+    KILLSTACKS(TOPENV);
+    if(MODE==USERM) IOERRORFLAG=0; 
+    if(UserAbort && ENAB_INTR) ABORT(ABORTE);
+  }
+  while(!HALTFLAG);
+}
+
+LOCAL void InitArg(int argc, char *argv[])
+{int i;
+ for(i=1;i<argc;i++)
+   if (argv[i][0]=='-') {
+     if( i < argc-1 )
+        switch(argv[i][1]) {
+          case 'l' : case 'L' : PROLIB=argv[++i];break;
+#if INITFILE
+          case 'r' : case 'R' : RESTORESTATE=argv[++i];break;
+#endif
+#ifdef DYNMEM
+          case 'a' : case 'A' : MAX_ATOMS=atoi(argv[++i]);break;
+          case 't' : case 'T' : MAX_TERMS=atoi(argv[++i]);break;
+          case 'c' : case 'C' : MAX_TRAILER=atoi(argv[++i]);break;
+          case 'g' : case 'G' : MAX_ENVS=atoi(argv[++i]);break;
+          case 's' : case 'S' : MAX_STRINGS=atoi(argv[++i]);break;
+#endif
+       }
+
+     switch(argv[i][1])
+       { case 'B' : if (argv[i][2]=='O' && argv[i][3]=='O' && 
+                      argv[i][4]=='T' && argv[i][5]==0) 
+                  BOOTING=true; break;
+         case 'v' : case 'V' : VERBOSE=false;break;
+       }
+   }
+     
+}
+
+#ifdef OYSTER
+LOCAL string RCNAME=OYSTERRC;
+#else
+LOCAL string RCNAME=PROLOGRC;
+#endif
+
+LOCAL void rcfile(void)
+{
+    string S,A,I;
+    extern char *getenv();                       /* from clib */
+    static char AA[100];
+    A="";
+#if RISCOS
+    S=getenv( "HUPro$RC" );
+    if( S == 0 )
+       S = RCNAME;
+    if(FileExist(S))
+      A = S;
+#else
+    if(FileExist(RCNAME)) A=RCNAME; 
+#if UNIX 
+    else
+      { A=AA;
+        S=getenv("HOME");I=A; while(*S) *I++= *S++;
+        if(*(--S) != '/') *I++= '/';
+        S=RCNAME; while(*S) *I++= *S++;
+        *I= '\0';
+        if(!FileExist(A)) return ;
+      }
+#endif
+#endif
+  if(!PROLIB && *A)PROLIB=A;
+  return ; 
+}
+
+#ifdef OYSTER
+LOCAL string Copyright="\nOyster-2 Programming System 0.7 24/04/90\n\n";
+#else
+LOCAL string Copyright="\nHU-Prolog Copright (c) 1990 C.Horn, M.Dziadzka, M.Horn\nRISC-OS VERSION 1.1\n\n";
+#endif
+
+GLOBAL void DOVERSION(void)
+{ ws(Copyright); 
+}
+
+int main(int argc, char *argv[])
+{ 
+  int first_time=0;
+  ARGC=argc;
+  ARGV=argv;
+  InitArg(argc,argv);
+#ifdef DYNMEM
+  InitdynMem();
+#endif
+  if (!BOOTING && first_time==0) InitAll();
+  if (BOOTING) InitMemory(); 
+#if  BIC
+  Init_Irm();
+#endif
+#if WINDOWS
+  if(xWINDOW_ON)w_init();
+#endif
+#if !CPM
+  if (!BOOTING) rcfile();
+#endif
+  if( !PROLIB) PROLIB= "\0";
+
+  /* Initialising Interrupt Handling */
+#if !CPM
+  signal(SIGINT,sig_handler);     /* user interrupt */
+#if UNIX || VMS
+  signal(SIGQUIT,sig_handler);    /* kill process */
+#endif
+#if VMS && REALARITH
+  signal(SIGFPE,sig_handler);     /* floating point exception */
+#endif
+#endif
+
+  globaladdr=setjmp(abort_label);
+  InitIO();
+  ERRORFLAG=0;
+  (void)setjmp(error_label);
+  if(ERRORFLAG) ABORT(ERRORFLAG);
+  UserAbort=false;
+
+  if( VERBOSE ) ws(Copyright); 
+
+  if(RST)goto l101;
+  EVENT=SPYTRACE;
+  if(globaladdr==100) goto l100;
+  if(globaladdr==101) goto l101;
+  if(globaladdr==999) goto l999;
+  if (BOOTING)
+  { 
+#if USER
+    InitUser(0);
+#endif
+    InitAtoms(); 
+    InitDatabase(); 
+#if USER
+    InitUser(1);
+#endif
+  }
+
+     aSYSMODE=true;
+     if(*PROLIB) TOPLEVEL(SYSM,0);
+  l100:
+     aSYSMODE=false;
+  l101:
+     globaladdr=101; 
+     if(first_time++==0) TOPLEVEL(USERM,1); 
+     else TOPLEVEL(USERM,0);
+  l999:
+     outputfile=STDOUT;
+#if WINDOWS
+     if(xWINDOW_ON)w_exit();
+#endif
+  exit(RETURN_CODE);
+  /*NOTREACHED*/
+}
+
+

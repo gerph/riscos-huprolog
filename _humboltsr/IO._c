@@ -1,0 +1,1072 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     **
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+#include "systems.h"
+#include "types.h"
+#include "errors.h"
+#include "atoms.h"
+#include "files.h"
+
+IMPORT void ABORT(),ARGERROR(),ERROR(),SYSTEMERROR();      /* from linebufffer.c */
+IMPORT boolean ground();
+IMPORT TERM SKELETON();
+IMPORT TERM A0,A1;               /* from evalpreds.c     */
+IMPORT int INTVALUE();           /* from arith.c         */
+IMPORT long lseek();             /* from clib            */
+IMPORT boolean LONGRES();        /* from unify.c         */
+IMPORT TERM READIN();            /* fom readin.c         */
+IMPORT void WRITEOUT(),DISPLAY(); /* from writeout.c      */
+IMPORT void ABORT_WRITE();
+IMPORT   ENV TOPENV;             /* from prolog.c        */
+IMPORT   boolean ECHOFLAG;
+IMPORT  void KILLSTACKS();      /* from unify.c */
+IMPORT  int ERRORFLAG;
+IMPORT  boolean EVENT;
+IMPORT  boolean SPYTRACE;
+IMPORT string strcpy();                 /* from CLIB            */
+IMPORT void destroycl();                /* from database.c      */
+IMPORT boolean UserAbort;
+IMPORT void CHECKATOM();
+IMPORT TERM CALLX;
+IMPORT ENV CALLXENV;
+IMPORT string s_cls(),s_gotoxy();         /* from sys.c */
+IMPORT boolean  xWINDOW_ON;
+IMPORT boolean FileExist();
+IMPORT boolean isatom();
+IMPORT TERM heapterms(),mk2sons();
+IMPORT ATOM copyatom();
+IMPORT void LONG_JMP(),ERRORJMP();
+IMPORT boolean INTRES();
+IMPORT int open(),creat(),close(),isatty(),unlink();  /* from clib */
+IMPORT int read(),write();
+IMPORT void TESTATOM();
+IMPORT boolean UNIFY();
+#if WINDOWS
+IMPORT char t_rc();
+#endif
+
+/*
+EXPORT boolean DOSEE(),DOTELL(),DOSEEK();
+EXPORT boolean DOOPEN(),DOCLOSE();
+EXPORT boolean DOREAD();
+EXPORT boolean DOGET(),DOGET0(),DOASK();
+EXPORT void DOPUT(),DOTAB(),DOWRITE(),DOWRITQ();
+EXPORT void DONL(),DOSKIP();
+EXPORT void DODISLAY();
+EXPORT  file inputfile,outputfile
+EXPORT  file OpenFile(ATOM,fmode);
+EXPORT  void CloseFile(file);
+EXPORT  void FileError(ERRORNR);
+EXPORT  file_type file_tab[];
+EXPORT  boolean FERRORFLAG;
+#ifdef ARCHY
+EXPORT  boolean SYNCLFLAG;
+#endif
+EXPORT TERM phy_name();
+EXPORT void SYNERROR(),ABORT() , SYSTEMERROR();
+EXPORT void GETCHAR(),REGET();
+EXPORT boolean LINEENDED(),FILEENDED();
+EXPORT char CH,LASTCH;
+EXPORT int ERRPOS;
+EXPORT   void InitIO()
+EXPORT   void ws(string)         write string to outputfile
+EXPORT   boolean IOERRORFLAG
+ */
+
+#if CPM
+#define isatty(f)    (!(f<0 || f>2))
+#endif
+
+FORWARD void FileError();  /* forward declaration */
+FORWARD void InitIO();
+
+#ifdef DYNMEM
+GLOBAL TERM tempterm;  /* for phy_name */
+#else
+GLOBAL TERM tempterm = nil_term;  /* for phy_name */
+#endif
+
+/*********************************************************/
+/*                filedefinitions                        */
+/*********************************************************/
+
+
+GLOBAL file_type file_tab[MAXFILES];
+GLOBAL boolean FERRORFLAG=true;
+#ifdef ARCHY
+GLOBAL boolean SYNCLFLAG=true;
+#endif
+GLOBAL file inputfile,outputfile;
+
+GLOBAL TERM phy_name(register ATOM A)
+{
+    int depth=0;
+
+    register TERM F=nil_term;
+    register CLAUSE CL;
+   start:;
+    if(depth++ > 10)ERROR(DEPTHE);
+    for(CL=clause(FNAME_2);non_nil_clause(CL);CL=nextcl(CL))
+    {
+        if(var_sizes(CL) !=0) SYSTEMERROR("phys filename");
+        if(name(arg2(head(CL)))==A)
+        { F=arg1(head(CL));
+          if(isatom(F)){ A=name(F) ; goto start; }
+          return F;
+        }
+    }
+    name(tempterm)=A;
+    return tempterm;
+}
+
+GLOBAL file OpenFile(register TERM filename, fmode mode)
+{
+    register file f;
+    deref(filename); 
+    if(! ground(filename,MAXDEPTH)) SYSTEMERROR("OpenFiles.0");
+    /* search filename in filetab */
+    for(f=0;f < MAXFILES;f++)
+    { if(FNAME(f)==nil_term || !UNI(filename,FNAME(f))) continue;
+      if(!xWINDOW_ON)return f;
+#if WINDOWS
+      if(FTYPE(f)==NORMFT) return f;
+      if(FTYPE(f)==WINDOWFT)
+        { if(mode !=look_mode) w_up(FWINPTR(f)); return f; }
+      SYSTEMERROR("OpenFiles.1");
+#endif
+    }
+    /* file not open */
+    for(f=0;f < MAXFILES ; f++)
+        if(FNAME(f)==nil_term) break;
+    if(f >=MAXFILES) return ERRFILE;
+    if( isatom(filename))
+    { string fn;
+        fn=tempcopy(name(filename));
+        /* an ordinary file */
+        switch(mode)
+        {
+            case look_mode: return NOFILE;
+            case read_mode:
+                     if((FINPTR(f)=open(fn,0))<0)
+                         return NOFILE;
+                     CANREAD(f)=!(CANWRITE(f)=false);
+                     break;
+            case write_mode:
+                     if((FOUTPTR(f)=creat(fn,0666))<0)
+                         return NOFILE;
+                     CANREAD(f)=!(CANWRITE(f)=true);
+                     break;
+            case read_write:
+                     if((FOUTPTR(f)=FINPTR(f)=open(fn,2))<0)
+                     {
+                         if(FileExist(fn)) return NOFILE;
+                         (void)close(creat(fn,0666));
+                         if((FINPTR(f)=FOUTPTR(f)=open(fn,2))<0)
+                         {
+                             unlink(fn);
+                             return NOFILE;
+                         }
+                     }
+                     CANREAD(f)=CANWRITE(f)=true;
+                     break;
+             default:
+                     SYSTEMERROR("OpenFile.2");
+        } /* switch */
+        FNAME(f)=SKELETON(NOT_1,filename); /* see SKELETON ! */
+        FTYPE(f)=NORMFT;
+        ISEOF(f)=ISINPUT(f)=false;
+        ISTTY(f)=isatty(f);
+        FLINENO(f)=0;
+        FCHARPOS(f)=FBUFLENGTH(f)=0;
+        return f;
+    }
+#if WINDOWS
+    else if(xWINDOW_ON && name(filename)==WINDOW_6)
+    {
+        int a,b,c,d;
+        static string winname;
+        byte
+        attr=0;
+        TERM T,TT;
+        if(mode==look_mode) return NOFILE;
+        TT=son(filename); a=INTVALUE(TT);
+        next_br(TT); b=INTVALUE(TT);
+        next_br(TT); c=INTVALUE(TT);
+        next_br(TT); d=INTVALUE(TT);
+        next_br(TT);T=TT;deref(T);
+        CHECKATOM(T);
+        winname=tempcopy(copyatom(name(T)));
+
+        next_br(TT);
+        deref(TT);
+        while(name(TT)==CONS_2)
+          { T=arg1(TT);TT=arg2(TT);
+            switch(name(T))
+            { case BLINK_0:   attr |=BLINK;break;
+              case REVERSE_0: attr |=REVERSE;break;
+              case BOLD_0:    attr |=BOLD;break;
+              case UNDER_0:   attr |=UNDERLINE;break;
+            }
+          }
+        TESTATOM(NIL_0,TT);
+        FTYPE(f)=WINDOWFT;
+        if((FWINPTR(f)=w_create(a,b,c,d,winname,attr))==NOWINDOW) 
+            return ERRFILE;
+        FNAME(f)=SKELETON(NOT_1,filename);
+        ISEOF(f)=ISINPUT(f)=false;
+        ISTTY(f)=true;
+        CANREAD(f)=CANWRITE(f)=true;
+        return f;
+    }
+#endif
+    else return NOFILE;
+}
+
+
+
+GLOBAL void CloseFile(register int f)
+{
+    if(f<4 || FNAME(f)==nil_term) return;
+    if(FTYPE(f)==NORMFT)
+    {
+        if(FINPTR(f) > 2) (void)close(FINPTR(f));
+        if(FOUTPTR(f) > 2) (void)close(FOUTPTR(f));
+    }
+#if WINDOWS
+    else if(xWINDOW_ON && FTYPE(f)==WINDOWFT) w_remove(FWINPTR(f));
+#endif
+    else SYSTEMERROR("CloseFile.1");
+    FNAME(f)=nil_term;
+}
+
+/******************************************************/
+/*                     basicio                        */
+/******************************************************/
+
+#define MAXDIGITS 25   /* max digits for number conversation */
+LOCAL  char numbuffer[MAXDIGITS]; /* for number conversation */
+
+
+GLOBAL int IOERRORFLAG=0;
+
+/* short hand notation for basic i/o in this module */
+#define NOTREAD  0
+#define NOTWRITE         1
+#define Errornumber      int
+
+
+LOCAL char *errmsg[]={
+                       "read error",/* NOTREAD */
+                       "write error" /* NOTWRITE */
+                      };
+
+LOCAL void IO_Error(TERM f, Errornumber e)
+{ if(IOERRORFLAG++>3) ABORT(IOERROR);
+  if((outputfile=OpenFile(phy_name(STDERR_0),write_mode))<0)
+      ABORT(IOERROR);
+  ws("\ni/o error in file '"); DISPLAY(f); ws("' : "); ws(errmsg[e]);
+  ERROR(IOERROR);
+}
+
+#if REALARITH
+
+GLOBAL char* ftoa(double d)
+{
+   register char *cp; 
+   register r;
+   register int expo ;
+
+   cp=numbuffer;
+   if(d !=0.0 && d==10.0*d)
+   {/*overflow */ 
+        strcpy(numbuffer,"99e999");
+        return (char *)numbuffer;
+   }
+   if( d < 0.0){
+ *cp++= '-'; d= -d; 
+ }
+   *cp++= '0' ;
+   *cp++= '.';
+   r=0;
+   expo=0;
+   if( d==0.0  ) {
+ *cp++= '0';
+ *cp++=0; 
+ return (char *)numbuffer;
+ }
+   if(d >=1.0 ){
+ while(d >=1.0e+9){
+         r +=10;d *=1.0e-10;
+         }
+ while(d >=1.0 ){
+         r++ ; d *=1.0e-1;
+         }
+ }
+   else {
+ while(d < 1.0e-10){
+         r -=10; d *=1.0e+10;
+         }
+ while(d < 1.0e-1){
+         r-- ; d *=10.0 ; 
+         }
+ }
+   expo=r ;
+#if MAXDIGITS-9<12
+   r=MAXDIGITS-9;
+#endif
+#if MAXDIGITS-9>=12
+   r=12;
+#endif
+   while(r-- >0){
+         register i;
+         d *=1.0e+1; i= (int)d ; d -= (double)i;
+         *cp++= '0' + i;
+    }
+   if(*(cp-1)=='9')
+   {
+        while(*--cp=='9');
+        if(*cp== '.') 
+          { *((cp++)-1)= '1';*cp++= '0';}
+        else
+          { (*cp++)++;*cp++= '0';}
+   }
+   while(*--cp=='0');
+   if(*cp++== '.') *cp++= '0';
+   *cp++= 'e';
+   if(expo <0)  { *cp++= '-' ; expo= -expo;}
+   else *cp++= '+';
+   if( expo >=100 ){*cp++='0' + expo / 100 ; expo %=100 ;} 
+   *cp++= '0' + expo/10;
+   *cp++='0' + expo %10;
+   *cp=0;
+   return (char *)numbuffer;
+}
+
+#endif
+
+#if LONGARITH 
+GLOBAL char *ltoa(long v)
+{
+      long int r; 
+      register char *p; 
+      int sign;
+      if(v<0l) {sign=1; r= -v;} else {sign=0; r=v;}
+      p= &numbuffer[MAXDIGITS-2];
+      if(r==0l) *p--='0';
+      else do *p--=r%10l+'0'; while(r/=10l);
+      if(sign) *p--='-';
+      p++;
+      numbuffer[MAXDIGITS-1]=0;
+      return p;
+}
+#endif
+
+GLOBAL char *itoa(int v)
+{ int r; 
+  register char *p; 
+  int sign, h=0;
+      if(v==minint) {v++; h=1; }
+      if(v<0l) {sign=1; r= -v;} else {sign=0; r=v;}
+      p= &numbuffer[MAXDIGITS-2];
+      if(r==0l) *p--='0';
+      else do *p--=r%10+'0';
+    while(r/=10);
+      numbuffer[MAXDIGITS-2]+=h;
+      if(sign) *p--='-';
+      /* h= &numbuffer[MAXDIGITS-2]-p; */
+      p++;
+      numbuffer[MAXDIGITS-1]=0;
+      return p;
+}
+
+GLOBAL void wi(int N)
+{ ws(itoa(N)); }
+
+GLOBAL void wc( char ch)
+{ static char c[2];c[0]=ch;c[1]='\0';ws(c); }
+
+GLOBAL void out_1(register char *s)
+{
+    (void)write(1,s,strlen(s));
+}
+
+GLOBAL void out_2(register char *s)
+{
+    (void)write(2,s,strlen(s));
+}
+
+#if !CPM
+
+#define OBLEN 85
+
+LOCAL char outbuffer[OBLEN];
+LOCAL int outbufpos=0;
+LOCAL boolean o_buf_flag=false;
+
+LOCAL mws(string s)
+{ register int i; register char *p;
+  for(i=0, p=s; *p; p++) i++;
+  if(FTYPE(outputfile)==NORMFT)
+  {
+      if(write(FOUTPTR(outputfile),s,i) !=i && !UserAbort)
+          IO_Error(FNAME(outputfile),NOTWRITE);
+  }
+#if WINDOWS
+  else if(xWINDOW_ON && FTYPE(outputfile)==WINDOWFT)
+      w_puts(FWINPTR(outputfile),s);
+#endif
+  else SYSTEMERROR("ws.1");
+}
+
+GLOBAL void out_buffer(int mode)
+{
+    switch(mode)
+    {
+        case BUF_ON: o_buf_flag=true;break;
+        case BUF_OFF: o_buf_flag=false;
+        case BUF_FLUSH: outbuffer[outbufpos]= '\0';
+                        mws(outbuffer);
+                        outbufpos=0;
+                        break;
+    }
+}
+  
+GLOBAL void ws(register char *s)
+/* write string */
+{
+    if(o_buf_flag)
+    {
+        while(*s)
+        {
+            outbuffer[outbufpos++]= *s++;
+            if(outbufpos > OBLEN-3)
+            {
+                outbuffer[outbufpos]= '\0';
+                mws(outbuffer);
+                outbufpos=0;
+            }
+        }
+    }
+    else 
+    mws(s);
+}
+#endif
+
+#if CPM
+GLOBAL void ws(register char *s)
+/* write string */
+{ register int i; register char *p;
+  for(i=0, p=s; *p; p++) i++;
+  if(write(FOUTPTR(outputfile),s,i) !=i && !UserAbort)
+          IO_Error(FNAME(outputfile),NOTWRITE);
+}
+#endif
+
+/****************** I N I T I A L I S A T I O N *****************/
+
+LOCAL initcounter=0;
+
+LOCAL TERM node(register ATOM A)
+{ register TERM T;
+  T=heapterms(1);
+  name(T)=A; son(T)=nil_term; return T;
+}
+
+GLOBAL void InitIO(void)
+{ 
+  int i;
+  tempterm = nil_term;
+  if(initcounter++) { ISEOF(inputfile)=false; return; } 
+     FNAME(0)=node(STDIN_0); ISEOF(0)=false; ISTTY(0)=isatty(0);
+     CANREAD(0)=!(CANWRITE(0)=false); ISINPUT(0)=true;
+     FCHARPOS(0)=FBUFLENGTH(0)=0;FLINENO(0)=1;
+     FLOGNAME(0)=STDIN_0;
+
+     FNAME(1)=node(STDOUT_0); ISEOF(1)=false; ISTTY(1)=isatty(1);
+     CANREAD(1)=!(CANWRITE(1)=true); ISINPUT(1)=false;
+     FLOGNAME(1)=STDOUT_0;
+
+     FNAME(2)=node(STDERR_0); ISEOF(2)=false; ISTTY(2)=isatty(2);
+     CANREAD(2)=!(CANWRITE(2)=true); ISINPUT(2)=false;
+     FLOGNAME(2)=STDERR_0;
+
+     FNAME(3)=node(STDTRACE_0); ISEOF(3)=false; ISTTY(3)=isatty(0);
+     CANREAD(3)=!(CANWRITE(3)=true); ISINPUT(3)=false;
+     FLOGNAME(3)=STDTRACE_0;
+
+#if HELP
+     FNAME(4)=node(STDHELP_0); ISEOF(4)=false; ISTTY(4)=isatty(0);
+     CANREAD(4)=!(CANWRITE(4)=true); ISINPUT(4)=false;
+     FLOGNAME(4)=HELP_0;
+#endif
+#if !HELP
+     FNAME(4)=nil_term;
+#endif
+#if HELP 
+     for(i=0;i<5;i++)
+#endif
+#if !HELP
+     for(i=0;i<4;i++)
+#endif
+     {
+         FTYPE(i)=NORMFT;
+         FOUTPTR(i)=FINPTR(i)=i;
+#if WINDOWS
+         if(xWINDOW_ON)
+         {
+             FTYPE(i)=WINDOWFT;
+             FWINPTR(i)=STDWIN;
+             CANREAD(i)=CANWRITE(i)=true;
+         }
+#endif
+     }
+     FINPTR(4)=FINPTR(3)=0;
+     FOUTPTR(4)=FOUTPTR(3)=1;
+     inputfile=STDIN;outputfile=STDOUT;
+     for(i=5;i<MAXFILES;i++) FNAME(i)=nil_term;
+    tempterm=heapterms(1); son(tempterm)=nil_term;
+    /* md: used in phy_name */
+}
+
+GLOBAL char CH, LASTCH;
+GLOBAL int  ERRPOS;
+
+/* also used in read.c */
+GLOBAL boolean unget=false;
+GLOBAL int FirstCharPos=0;
+
+GLOBAL void fillbuffer(void)
+{
+ FirstCharPos=CHARPOS=ERRPOS=LINELENGTH=0;
+#if WINDOWS
+  if(FTYPE(inputfile)==NORMFT)
+#endif
+  {
+    if((LINELENGTH=read(FINPTR(inputfile),LINEBUF,BUFLENGTH-1)) < 0)
+        IO_Error((FNAME(inputfile)),NOTREAD);
+    if(LINELENGTH==0) ISEOF(inputfile)=true; else ISEOF(inputfile)=false;
+  }
+#if WINDOWS
+  else if(xWINDOW_ON) /* FTYPE(inputfile)==WINDOWFT */
+  {
+    if((LINELENGTH=w_gets(FWINPTR(inputfile),LINEBUF,BUFLENGTH-1)) < 0)
+        IO_Error((FNAME(inputfile)),NOTREAD);
+    if(LINELENGTH==0) ISEOF(inputfile)=true; else ISEOF(inputfile)=false;
+  }
+#endif
+ LINEBUF[LINELENGTH]=0;
+}
+
+GLOBAL boolean FILEENDED(void)
+{
+if(!unget && CHARPOS >=LINELENGTH && !ISTTY(inputfile))
+ fillbuffer();
+return (!unget && ISEOF(inputfile) && (CHARPOS >=LINELENGTH));
+}
+
+/* Get the next character of the current input file in 'ch'. */
+/* inline-code in READIN */
+GLOBAL void GETCHAR(void)
+{ 
+  if(unget){unget=false; return;}
+  LASTCH=CH;
+  if(FILEENDED()){CH= '\n'; return; }
+  if( CHARPOS >=LINELENGTH ){
+     /* no char's in the buffer */
+     fillbuffer();
+     }
+  CH=LINEBUF[CHARPOS++] ;if(ECHOFLAG)wc(CH);
+  if(CH== '\n') {FirstCharPos=CHARPOS ; ERRPOS=0; LINENUMBER++;}
+}
+
+GLOBAL boolean LINEENDED(void)
+{ if(CHARPOS >=LINELENGTH && !ISTTY(inputfile))
+ fillbuffer();
+  return (FILEENDED() || LINEBUF[CHARPOS]== '\n');
+}
+
+GLOBAL void REGET(void)
+{ unget=true;
+}
+
+LOCAL struct { int ERRNR; string ERRMSG; } ERRTAB[]=
+{ { ABORTE         ,  "execution aborted"  },
+  { ARGE           ,  "unsuitable argument(s) to system predicates"  },
+  { ATOMSPACEE     ,  "out of atom space"  },
+  { BADARITYE      ,  "arity of functor out of range"  },
+  { BADCDDE        ,  "probably malformed ',..'"  },
+  { BADCHARE       ,  "character value out of range"  },
+  { BADDOTE        ,  "closing bracket missing"  },
+  { BADEXPE        ,  "malformed expression"  },
+  { BADKETE        ,  "unmatched closing bracket"  },
+  { BADTYPE        ,  "bad numerical argument type "  },
+  { CALLE          ,  "unsuitable arguments to 'call'"  },
+  { COMMENTE       ,  "unterminated comment"  },
+  { DEPTHE         ,  "nesting too deep  probably cyclic term"  },
+  { DIV0E          ,  "division or mod by zero"  },
+  { EOFE           ,  "unexpected end of file"  },
+  { FRAMESPACEE    ,  "out of frame space"  },
+  { IOERROR        ,  "I/O error"  },
+  { LOCALSPACEE    ,  "out of local stack space"  },
+  { NEEDOPE        ,  "infix or postfix operator expected"  },
+  { NEEDQUOTEE     ,  "closing quote expected"  },
+  { NEEDRANDE      ,  "operand or prefix operator expected"  },
+  { NUMBERSYNE     ,  "bad number syntax"  },
+  { NVARSE         ,  "out of variable table space"  },
+  { PRECE          ,  "operator has unsuitable precedence"  },
+  { PROGFAILE      ,  "goal failed during program input"  },
+  { READNESTE      ,  "nesting too deep in input"  },
+  { READSTACKE     ,  "read stack overflow"  },
+  { STDFUNCARGE    ,  "standard function called with wrong argument"  },
+  { SYSPROCE       ,  "accessing or modifying system procedures"  },
+  { TRAILSPACEE    ,  "out of trail space"  },
+  { UNDEFFUNCE     ,  "undefined function in expression"  },
+  { VARSPACEE      ,  "out of variable name space"  },
+  { WIERDCHE       ,  "illegal character in input"  },
+  { aSTRINGSPACEE  ,  "out of string space"  },
+  { FPEXCEPTE      ,  "floating point exception" },
+  { CANTCR         ,  "can't create file" },   
+  { CANTOP         ,  "can't open file" },      
+  { NOTOPEN        ,  "file is not open" },      
+  { ISTTYE         ,  "file is a tty" },          
+  { TOMANY         ,  "to many files" },           
+  { CUROUT         ,  "file is current outputfile" },
+  { CURINP       ,  "file is current inputfile" },
+  { ONLOUT         ,  "file is only open for output" },
+  { ONLINP         ,  "file is only open for input" }, 
+  { CODESPACEE     ,  "out of code space" },
+  { LABELSPACEE    ,  "out of label space" },
+  { UNDEFLABEL     ,  "undefined label" },
+  { 0              ,  "" }
+};
+
+GLOBAL string ERRORMSG(int N)
+{ register int I;
+    for(I=0; ERRTAB[I].ERRNR; I++)
+      if(ERRTAB[I].ERRNR==N) break;
+  return ERRTAB[I].ERRMSG;
+}
+
+GLOBAL void ABORT(int N)
+{ 
+  static abort_counter=0;
+  if(N !=NOERROR)
+  { 
+    if(abort_counter++  >  2 ||
+       (outputfile=OpenFile(phy_name(STDERR_0),write_mode)) < 0)
+      outputfile=STDERR;
+    ws("\n");
+    if(non_nil_term(CALLX)) ABORT_WRITE(CALLX);
+    ws("\nERROR ");wi(N);
+    ws(": "); ws(ERRORMSG(N)); ws(".\n"); 
+#if WINDOWS
+    if(xWINDOW_ON && FTYPE(outputfile)==WINDOWFT)
+    {
+          ws("\npress any key to continue");
+          t_rc(); /* lese ein zeichen vom terminal ohne echo */
+          CloseFile(outputfile);
+    }
+#endif
+  }
+  ERRORFLAG=0; EVENT=SPYTRACE;
+  if(TOPENV) KILLSTACKS(TOPENV);
+  abort_counter=0;
+  LONG_JMP(101);
+}
+
+
+GLOBAL void ARGERROR(void)
+{ ERROR(ARGE); }
+
+GLOBAL void ERROR(int N)
+{
+    ERRORFLAG=N;
+    EVENT=true;
+    ERRORJMP();
+}
+
+GLOBAL void FileError(int error)
+{
+    if(!FERRORFLAG) return;
+    ERROR(error);
+}
+
+/* Output an error message and recover if possible */
+
+GLOBAL void SYNERROR(int N)
+{ int  I;
+  if(FLOGNAME(inputfile) !=STDIN_0)
+  {  if((outputfile=OpenFile(phy_name(STDERR_0),write_mode)) < 0)
+        outputfile=STDERR;
+     ws("\nSYNTAXERROR  file: ");
+     WRITEOUT(phy_name(FLOGNAME(inputfile)),false);
+     ws("  line: ");
+     wi(LINENUMBER+1);
+     ws("  position: ");
+     wi(CHARPOS-FirstCharPos);
+     ws("\n");
+     if(!ECHOFLAG) { 
+        for(I=FirstCharPos;LINEBUF[I]!='\n' && I < LINELENGTH; I++)
+            wc(LINEBUF[I]);
+        ws("\n");
+        }
+#ifdef ARCHY
+     if( SYNCLFLAG ) CloseFile( inputfile );
+#endif
+
+  }
+  for(I=FirstCharPos; I<ERRPOS-1; ++I)
+    if(LINEBUF[I]=='\t') ws("\t"); else ws(" ");
+  ws("^"); 
+
+  if(inputfile==STDIN || FTYPE(inputfile)==WINDOWFT) 
+      CHARPOS=LINELENGTH;
+  CALLX=nil_term;
+  ERROR(N);
+}
+
+GLOBAL void SYSTEMERROR(string m)
+{ out_2("\n\n[System Error in: "); out_2(m); out_2("]\n"); 
+  LONG_JMP(999);
+} 
+
+
+
+#define abs(l)           (((l) < 0L) ? -(l) : (l))
+
+LOCAL file f;
+LOCAL TERM filename;
+LOCAL ATOM matom;
+LOCAL TERM seestack[MAXFILES];
+LOCAL int seesptr = 0;
+
+GLOBAL boolean DOSEE(void)
+{
+    CHECKATOM(A0);
+    matom=name(A0);
+    if(matom==USER_0)matom=STDIN_0;
+    filename=phy_name(matom);
+    f=OpenFile(filename,read_mode);
+    switch(f)
+    {
+         case NOFILE:  FileError(CANTOP); return false;
+         case ERRFILE: FileError(TOMANY); return false;
+         default:      
+               if(f==outputfile && FTYPE(f)==NORMFT)
+                   { FileError(CUROUT); return false; } 
+               if(!CANREAD(f))
+                   { FileError(ONLOUT); return false; }
+               if( inputfile != f ) {
+                  seestack[seesptr] = FNAME(inputfile);
+                  if( ++seesptr > MAXFILES )
+                    SYSTEMERROR( "SEE.1: Too many nested see's" );
+                  inputfile=f;
+                }
+              if(!ISINPUT(inputfile))
+               {
+                 ISINPUT(inputfile)=true;
+                 CHARPOS=LINELENGTH=0;
+               }
+    }
+    FLOGNAME(inputfile)=copyatom(matom);
+    return true;
+}
+
+GLOBAL boolean DOSEEN(void)
+{
+     if( seesptr <= 0 ) {
+        seesptr = 0;     
+        return true;
+     }
+     CloseFile( inputfile );
+     inputfile = OpenFile( seestack[--seesptr], read_mode );
+     ISEOF(inputfile) = false;
+     return true;
+}
+
+GLOBAL boolean DOOPEN(void)
+{
+    CHECKATOM(A0);
+    matom=name(A0);
+    if(matom==USER_0) return true; /* user is open ! */
+    filename=phy_name(matom);
+    switch(f=OpenFile(filename,read_write))
+    {
+         case NOFILE:  FileError(CANTOP);return false;
+         case ERRFILE: FileError(TOMANY);return false;
+    }
+    FLOGNAME(f)=copyatom(matom);
+    return true;
+}
+
+GLOBAL boolean DOCLOSE(void)
+{
+    CHECKATOM(A0);
+    matom=name(A0);
+    if(matom==USER_0) return true; /* ! */
+    filename=phy_name(matom);
+    if((f=OpenFile(filename,look_mode))==NOFILE)
+    {
+         FileError(NOTOPEN);return false;
+    }
+    CloseFile(f);
+    if(inputfile==f) 
+        if((inputfile=OpenFile(phy_name(STDIN_0),read_mode)) < 0)
+        inputfile=STDIN;
+    if(outputfile==f)
+        if((outputfile=OpenFile(phy_name(STDOUT_0),write_mode)) < 0)
+        outputfile=STDOUT;
+    return true;
+}
+
+
+GLOBAL boolean DOTELL(void)
+{
+    CHECKATOM(A0);
+    matom=name(A0);
+    if(matom==USER_0)matom=STDOUT_0;
+    filename=phy_name(matom);
+    switch(f=OpenFile(filename,write_mode))
+    {
+         case NOFILE:  FileError(CANTCR); return false;
+         case ERRFILE: FileError(TOMANY); return false;
+         default:      
+               if(f==inputfile && FTYPE(f)==NORMFT)
+                   { FileError(CURINP); return false; }
+               if(!CANWRITE(f))
+                   { FileError(ONLINP); return false; }
+               outputfile=f;
+              if(ISINPUT(outputfile) && FTYPE(f)==NORMFT)
+              {
+                 ISINPUT(outputfile)=false;
+                 (void)lseek(outputfile,
+                       (long)(FCHARPOS(outputfile)-
+                             FBUFLENGTH(outputfile)),1);
+             }
+    }
+    FLOGNAME(outputfile)=copyatom(matom);
+    return true;
+}
+
+
+#if !CPM
+GLOBAL boolean DOSEEK(void)
+{
+    long l;
+    boolean res;
+
+    CHECKATOM(A0);
+    if(name(A0)==USER_0) ARGERROR();
+    matom=name(A0);
+    filename=phy_name(matom);
+    if((f=OpenFile(filename,look_mode))<0)
+        { FileError(NOTOPEN); return false; }
+    if((f<3)||ISTTY(f)||FTYPE(f) !=NORMFT)
+        { FileError(ISTTYE); return false; }
+    switch(name(A1))
+    {
+         case END_0:
+                 l=lseek(f,0L,2);
+                 res= (l >=0L);
+                 FBUFLENGTH(f)=FCHARPOS(f)=0;
+                 break;
+         case INTT: l=(long)ival(A1); goto contseek;
+#if LONGARITH
+         case LONGT: l=  longval(A1);
+#endif
+      contseek:  res= (lseek(f,abs(l),(l >=0) ? 0 : 2) >=0L);
+                 FBUFLENGTH(f)=FCHARPOS(f)=0;
+                 break;
+         case UNBOUNDT:
+                 l=lseek(f,(long)0,1);
+                 l=l-(long)
+                     (ISINPUT(f) ? (FBUFLENGTH(f)-FCHARPOS(f)):0);
+#if LONGARITH
+                 return LONGRES(A1,l);
+#endif
+#if ! LONGARITH
+                 return INTRES(A1,(int)l);
+#endif
+         default: ARGERROR();
+    }
+    return res;
+}
+#endif
+
+LOCAL TERM oldfilename;
+GLOBAL void setinfile(void)
+{
+    oldfilename=FNAME(inputfile);
+    if((inputfile=OpenFile(phy_name(STDIN_0),read_mode)) < 0)
+    {
+        inputfile=STDIN ; /*  ?????? */
+    }
+}
+
+GLOBAL void getinfile(void)
+{
+    if((inputfile=OpenFile(oldfilename,read_mode)) < 0)
+        SYSTEMERROR("getinfile.1");
+}
+
+GLOBAL void setoutfile(void)
+{
+    oldfilename=FNAME(outputfile);
+    if((outputfile=OpenFile(phy_name(STDOUT_0),write_mode)) < 0)
+    {
+        outputfile=STDOUT ; /*  ?????? */
+    }
+}
+GLOBAL void getoutfile(void)
+{
+    if((outputfile=OpenFile(oldfilename,write_mode)) < 0)
+        SYSTEMERROR("getoutfile.1");
+}
+
+GLOBAL boolean DOGET0(void)
+{ 
+    register int ch;
+    if(FILEENDED())ch= -1;
+    else { GETCHAR(); ch=CH; }
+    return INTRES(A0,ch);
+}
+
+GLOBAL boolean DOGET(void)
+{ 
+    register int ch;
+  nextch:
+    if(FILEENDED()) ch= -1; 
+    else 
+    { GETCHAR();
+      if(CH<=' ' || CH>=127) goto nextch;
+      ch= (int)CH;
+    }
+    return INTRES(A0,ch);
+}
+
+GLOBAL void DOSKIP(void)
+{
+    register int n;
+    n=(INTVALUE(A0) & 255);
+  nextch:
+    if(FILEENDED()) return;
+    GETCHAR();
+    if(CH!=n) goto nextch;
+}
+
+GLOBAL boolean DOASK(void)
+{
+    register int ch;
+  nextch:
+    if(FILEENDED()) return true;
+    GETCHAR(); 
+    if(CH==0) goto nextch;
+    ch=CH;
+    while((CH!=10) && !FILEENDED())
+        GETCHAR();
+    if(name(A0)==UNBOUNDT) return INTRES(A0,ch);
+    return INTVALUE(A0)==ch;
+}
+
+GLOBAL void DOTAB(void)
+{  register int n;
+   n=INTVALUE(A0);
+#if !CPM
+   out_buffer(BUF_ON);
+#endif
+   while(n-->0) ws(" ");
+#if !CPM
+   out_buffer(BUF_OFF);
+#endif
+}
+ 
+GLOBAL void DOPUT(void)
+{
+#if !CPM
+  out_buffer(BUF_ON);
+#endif
+    while(name(A0)==CONS_2)
+      { wc((char)(INTVALUE(arg1(A0)) & 255)); A0=arg2(A0); }
+    if(name(A0)!=NIL_0)
+         wc((char)((INTVALUE(A0))&255));
+#if !CPM
+  out_buffer(BUF_OFF);
+#endif
+}
+ 
+
+GLOBAL boolean DOFASSIGN(void)
+{
+    register CLAUSE CL,CC;
+    TERM F;
+
+    if(! ground(A0,MAXDEPTH)) ARGERROR();
+    if(!ground(A1,MAXDEPTH)) 
+    {
+        for(CL=clause(FNAME_2);non_nil_clause(CL);CL=nextcl(CL))
+        {
+            if(var_sizes(CL) !=0) SYSTEMERROR("assign");
+            if(UNI(A0,arg2(head(CL)))) 
+               return UNI(A1,arg1(head(CL)));
+        }
+        return false;
+    }
+
+    for(CL=CC=clause(FNAME_2);non_nil_clause(CL);CC=CL,CL=nextcl(CL))
+    {
+        if(var_sizes(CL) !=0) SYSTEMERROR("assign");
+        if(UNI(A0,arg2(head(CL))))
+        { if(CL==clause(FNAME_2)) clause(FNAME_2)=nextcl(CL);
+          else nextcl(CC)=nextcl(CL);
+          destroycl(CL);
+          break;
+        }
+    }
+
+    if(UNI(A0,A1)) return true;
+    F=mk2sons(UNBOUNDT,nil_term,UNBOUNDT,nil_term);
+    (void)UNI(F,A1);(void)UNI(br(F),A0);
+    CL=heapterms(3);
+    name(head(CL))=FNAME_2; son(head(CL))=SKELETON(FNAME_2,F);
+    name(body(CL))=nil_atom; nextcl(CL)=clause(FNAME_2); setnvars(CL,0); 
+    clause(FNAME_2)=CL;
+    return true;
+}
+
+GLOBAL void DOCLS(void)
+{ 
+#if WINDOWS
+  if(xWINDOW_ON && FTYPE(outputfile)==WINDOWFT) 
+    w_cls(FWINPTR(outputfile));
+  else 
+#endif
+    ws(s_cls());
+}
+
+GLOBAL void DOGOTOXY(void)
+{ register int S,Z;
+  extern TERM A0,A1;
+  extern int INTVALUE();
+  S=INTVALUE(A0);Z=INTVALUE(A1);
+#if WINDOWS
+  if(xWINDOW_ON && FTYPE(outputfile)==WINDOWFT) 
+    w_gotoxy(FWINPTR(outputfile),S,Z);
+  else 
+#endif
+    ws(s_gotoxy(S,Z));
+}
+    
+

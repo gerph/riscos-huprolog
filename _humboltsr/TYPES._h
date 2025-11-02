@@ -1,0 +1,547 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     ** 
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+
+#define IMPORT  extern
+#define FORWARD extern
+#define LOCAL   static
+#define GLOBAL
+
+#if P8000 || SUN3 || VMS
+#define REGISTER  register /*if the system has up to 6 registers */
+#endif
+
+#if !(P8000 || SUN3 || VMS )
+#define REGISTER  /* no register */
+#endif
+
+#if BIT16 || BIT8
+#define maxint (32767)            /* maximal integer */
+#define minint (-32767)           /* minimal integer */
+#endif
+
+#if BIT32
+#define maxint (2147483647)
+#define minint (-2147483647)
+#endif
+
+#if LONGARITH
+#define maxlong (2147483647l)
+#define minlong (-2147483647l)
+#endif
+
+typedef unsigned int card;
+#if !CPM /* byte is a standard type of Manx C */
+typedef unsigned char byte;
+#endif
+
+typedef char *string;  /* real strings, virtual strings are STRING  */
+
+IMPORT string itoa();
+
+#if !MSC 
+#define far /* special keyword of Microsoft C-Compilers */
+#endif
+
+#define MAXPREC 2047     /* Max. operator precedence. */
+#define SUBPREC  999     /* Max. prec. for subterms. */
+
+#define boolean  card
+#define bit      card 
+
+#define true     1
+#define false    0
+
+/********************************************************************/
+/* References to data structures are implemented as integers,
+   giving the entry number for a virtual address space. The 
+   reference to the dynamic data structures itself is realized
+   by an access function.
+*/
+/********************************************************************/
+
+#if !POINTEROFFSET
+#define TERM     card
+#define ATOM     card
+#define CLAUSE   TERM
+#define TRAIL    card
+#define ENV      card
+#define STRING   card
+#define nil_clause         (TERM)0
+#define non_nil_clause(c)  (c)
+#define nil_term           (TERM)0
+#define non_nil_term(t)    (t)
+#define nil_atom           (ATOM)0
+#define non_nil_atom(a)    (a)
+#define nil_env            (ENV)0
+#define non_nil_env(e)     (e)
+#endif
+
+#if POINTEROFFSET
+#define ATOM     int
+#define ENV      card
+#define STRING   int
+
+typedef struct TERM_NODE 
+  { ATOM tNAME; 
+    union { struct TERM_NODE *t_son;
+            int t_ival;
+            struct TERM_NODE *t_val;
+            int t_offset;
+          } tNODECASE; } TERMNODE,*TERM;
+typedef TERM *TRAIL;
+typedef TERM CLAUSE;
+
+#define nil_clause         (&TERMAREA[0]) 
+#define non_nil_clause(C)  ((C) != nil_clause)
+#define nil_term           (&TERMAREA[0])
+#define non_nil_term(C)    ((C) != nil_term)
+#define nil_atom           (ATOM)0
+#define non_nil_atom(C)    ((C) != nil_atom)
+#define nil_env            (ENV)0
+#define non_nil_env(e)     (e)
+#endif
+
+/****************************************************************/
+/*   global programmodes                                         */
+/****************************************************************/
+
+#define SYSM 0
+#define PROGM 1
+#define USERM 2
+#define PHASE card
+
+/***************************************************************/
+/*  access definition                                   */
+/***************************************************************/
+
+#if BIC 
+#define acc(t,f,i)        (*f(i))
+#define faracc(t,f,i)     (*f(i))
+#define inc_trail(i)      (++i)
+#define inc_env(i)        (++i)
+#define inc_atom(i)       (++i)
+#define inc_term(i)       (++i)
+#define dec_trail(i)      (--i)
+#define dec_atom(i)       (--i)
+#define dec_term(i)       (--i)
+#define trail_units(i)    i
+#define env_units(i)      i
+#define atom_units(i)     i
+#define term_units(i)     i
+#define exrnal(t,f)     extern t *f()
+#define farexternal(t,f)  extern t *f()
+#define declare(t,f,i)    t *f(n) int n; { static t f[i]; return &(f[n]); } 
+#define fardeclare(t,f,i) t *f(n) int n; { static t f[i]; return &(f[n]); } 
+#endif
+
+
+#if BYTEOFFSET
+#define acc(t,f,i)        (*((t *)(&(f[i]))))
+#define faracc(t,f,i)     (*((t far *)(&(f[i]))))
+#if BIT8 || BIT16
+#define inc_trail(i)      (i+=2)
+#define inc_env(i)        (i+=2)
+#define inc_atom(i)       (i+=2)
+#define inc_term(i)       (i+=2)
+#define dec_trail(i)      (i-=2)
+#define dec_atom(i)       (i-=2)
+#define dec_term(i)       (i-=2)
+#define trail_units(i)    (2*(i))
+#define env_units(i)      (2*(i))
+#define atom_units(i)     (2*(i))
+#define term_units(i)     (2*(i))
+#endif
+#if BIT32
+#define inc_trail(i)      (i+=4)
+#define inc_env(i)        (i+=4)
+#define inc_atom(i)       (i+=4)
+#define inc_term(i)       (i+=4)
+#define dec_trail(i)      (i-=4)
+#define dec_atom(i)       (i-=4)
+#define dec_term(i)       (i-=4)
+#define trail_units(i)    (4*(i))
+#define env_units(i)      (4*(i))
+#define atom_units(i)     (4*(i))
+#define term_units(i)     (4*(i))
+#endif
+#define external(t,f)     extern char f[]
+#define farexternal(t,f)  extern char far f[]
+#define declare(t,f,i)    char f[i*sizeof(t)]
+#define fardeclare(t,f,i) char far f[i*sizeof(t)]
+#endif
+
+#if WORDOFFSET
+#define acc(t,f,i)        f[i]
+#define faracc(t,f,i)     f[i]
+#define inc_trail(i)      (++i)
+#define inc_env(i)        (++i)
+#define inc_atom(i)       (++i)
+#define inc_term(i)       (++i)
+#define dec_trail(i)      (--i)
+#define dec_atom(i)       (--i)
+#define dec_term(i)       (--i)
+#define trail_units(i)    (i)
+#define env_units(i)      (i)
+#define atom_units(i)     (i)
+#define term_units(i)     (i)
+#define external(t,f)     extern t f[]
+#define farexternal(t,f)  extern t far f[]
+#define declare(t,f,i)    t f[(i)]
+#define fardeclare(t,f,i) t far f[(i)]
+#endif
+
+#if POINTEROFFSET
+#define acc(t,f,i)        f[i]
+#define faracc(t,f,i)     f[i]
+#define inc_trail(i)      (++i)
+#define inc_env(i)        (++i)
+#define inc_atom(i)       (++i)
+#define inc_term(i)       (++i)
+#define dec_trail(i)      (--i)
+#define dec_atom(i)       (--i)
+#define dec_term(i)       (--i)
+#define trail_units(i)    (i)
+#define env_units(i)      (i)
+#define atom_units(i)     (i)
+#define term_units(i)     (i)
+#define external(t,f)     extern t f[]
+#define farexternal(t,f)  extern t f[]
+#define declare(t,f,i)    t f[i]
+#define fardeclare(t,f,i) t f[i]
+#endif
+
+
+/***************************************************************/
+/*  definition for terms and clauses                           */
+/***************************************************************/
+
+
+#if !POINTEROFFSET
+farexternal(ATOM,tNAME);
+farexternal(card,tNODECASE);
+
+#define name(term)       faracc(ATOM,tNAME,term)
+#define son(term)        faracc(TERM,tNODECASE,term)
+#define ival(term)       son(term) 
+#define val(term)        son(term) 
+#define offset(term)     son(term) 
+
+#define br(term)         ((term)+term_units(1))
+#define next_br(T)       ((T) +=term_units(1)) /* see also arg3 */
+#endif
+
+#if POINTEROFFSET
+#ifdef DYNMEM
+extern TERMNODE *TERMAREA;
+#else
+extern TERMNODE TERMAREA[];
+#endif
+
+#define name(term)       ((term)->tNAME)
+#define son(term)        /*(TERM)*/((term)->tNODECASE.t_son)
+#define ival(term)       /*(int)*/((term)->tNODECASE.t_ival)
+#define val(term)        /*(TERM)*/((term)->tNODECASE.t_val)   
+#define offset(term)     /*(int)*/((term)->tNODECASE.t_offset)
+
+#define br(term)         ((term)+1)
+#define next_br(T)       (++(T)) 
+#endif
+
+
+IMPORT TERM stackterms(),heapterms();
+IMPORT TERM mkfunc(),mkatom(),mkint(),mkfreevar(),mk2sons();
+IMPORT TERM arg1(),arg2(),arg3(),arg4();
+
+/*  definition for clauses */
+
+#define nextcl(clause)   son(clause) 
+
+#define head(clause)     br(br(clause))
+#define body(clause)     br(br(br(clause)))
+#define setnvars(clause,N)      (ival(br(clause))=(int)term_units(N)) 
+#define var_sizes(clause)       ((int)ival(br(clause))) 
+
+#define deny(clause)     setnvars(clause,0x7fff) 
+#define denied(clause)   (var_sizes(clause)== 0x7fff) 
+
+#define DUMMYCL  (CLAUSE)(0xffff) 
+
+/**************************************************************/
+/*
+ *  atoms
+ */
+/**************************************************************/
+
+#define NONO 0
+#define FXO 1
+#define FYO 2
+#define XFO 3
+#define YFO 4
+#define XFXO 5
+#define XFYO 6
+#define YFXO 7
+
+#define NORMP       0
+#define EVALP       1
+#define BTEVALP     2
+#define VARP        3
+#define CUTP        4
+#define ANDP        5
+#define ORP         6
+#define ARITHP      7
+#define CCONSP      8
+#define FAILP       9
+#define ISVARP     10
+#define ISATOMP    11
+#define ISINTEGERP 12
+#define GOTOP      13
+#define ISMEMBP    14
+#define NOMEMBP    15
+
+#define  PREC   unsigned
+
+#define MAXARITY 127     /* max. arity for atoms */
+#define ARITY_TYPE unsigned char  
+#define PREC_TYPE unsigned short  
+#define INFO_TYPE unsigned short  
+
+#ifdef DYNMEM
+extern ARITY_TYPE *a_ARITY; 
+extern CLAUSE *a_CLAUSE;
+extern STRING *a_IDENT;
+extern ATOM *a_NEXTATOM;
+extern ATOM *a_CHAINATOM;
+extern PREC_TYPE *a_PREC;
+extern INFO_TYPE *a_INFO;
+#if HACKY
+extern card *a_NROFCALLS;
+#endif
+
+#else
+external(ARITY_TYPE,a_ARITY); 
+external(CLAUSE,a_CLAUSE);
+farexternal(STRING,a_IDENT);
+farexternal(ATOM,a_NEXTATOM);
+farexternal(ATOM,a_CHAINATOM);
+farexternal(PREC_TYPE,a_PREC);
+farexternal(INFO_TYPE,a_INFO);
+#if HACKY
+farexternal(card,a_NROFCALLS);
+#endif
+
+#endif
+
+#if BIT8
+#define repchar(c)               acc(char,STRINGTAB,c)
+external(char,STRINGTAB);
+extern string tempcopy();
+#endif
+#if ! BIT8  
+#define repchar(c)               STRINGTAB[c]
+
+#ifdef DYNMEM
+extern char *STRINGTAB;
+#else
+extern char STRINGTAB[];
+#endif
+
+#if POINTEROFFSET
+#define tempcopy(a)              (&(STRINGTAB[longstring(a)]))
+#endif
+#endif
+
+#define arity(atom)              (acc(ARITY_TYPE,a_ARITY,atom))
+#define clause(atom)             (acc(CLAUSE,a_CLAUSE,atom))
+#define longstring(atom)         (faracc(STRING,a_IDENT,atom))
+#define nextatom(atom)           (faracc(ATOM,a_NEXTATOM,atom))
+#define chainatom(atom)          (faracc(ATOM,a_CHAINATOM,atom))
+#define oprec(atom)              (faracc(PREC_TYPE,a_PREC,atom))
+#define info(atom)               (faracc(INFO_TYPE,a_INFO,atom))
+#if HACKY
+#define nrofcalls(atom)          (faracc(card,a_NROFCALLS,atom))
+#endif
+
+#define class(atom)              (info(atom) & 0x000f)
+#define setclass(atom,n)         (info(atom)=(info(atom)&0xfff0) | n)
+
+#define oclass(atom)             ((info(atom) & 0x00f0) >> 4)
+#define setoclass(atom,n)        (info(atom)=(info(atom)&0xff0f)|(n<<4))
+
+#define private(atom)            (info(atom) & 0x0800)
+#define setprivate(atom)         (info(atom) |=0x0800)
+#define setnotprivate(atom)      (info(atom) &=0xf7ff)
+
+#define system(atom)             (info(atom) & 0x0400)
+#define setsystem(atom)          (info(atom) |=0x0400)
+#define setnotsystem(atom)       (info(atom) &=0xfbff)
+
+#define spy(atom)                (info(atom) & 0x0200)
+#define setspy(atom)             (info(atom) |=0x0200)
+#define setnotspy(atom)          (info(atom) &=0xfdff)
+
+#define rc(atom)                 (info(atom) & 0x0100)
+#define setrc(atom)              (info(atom) |=0x0100)
+#define setnotrc(atom)           (info(atom) &=0xfeff)
+
+#define ensure(atom)             (info(atom) & 0x1000)
+#define setensure(atom)          (info(atom) |=0x1000)
+#define setnotensure(atom)       (info(atom) &=0xefff)
+
+#define hide(atom)               (info(atom) & 0x2000)
+#define sethide(atom)            (info(atom) |=0x2000)
+#define setnothide(atom)         (info(atom) &=0xdfff)
+
+#define first(atom)              (info(atom) & 0x4000)
+#define setfirst(atom)           (info(atom) |=0x4000)
+#define setnotfirst(atom)        (info(atom) &=0xbfff)
+
+
+/**************************************************************/
+/*
+ *  trail
+ */
+/**************************************************************/
+
+#if !POINTEROFFSET
+farexternal(TERM,TRAILTAB);
+
+#define boundvar(v)  faracc(TERM,TRAILTAB,v) 
+#endif
+
+#if POINTEROFFSET
+#ifdef DYNMEM
+IMPORT TERM *TRAILTAB;
+#else
+IMPORT TERM TRAILTAB[];
+#endif
+#define boundvar(v)    (*(v))
+#endif
+
+/**************************************************************/
+/*
+ *  environments
+ */
+/**************************************************************/
+
+#ifdef DYNMEM
+extern TERM *e_FCALL;
+extern TERM *e_FBASE;
+extern ENV *e_FENV;
+extern ENV *e_FCHOICE;
+extern ATOM *e_FATOM;
+extern CLAUSE *e_FCLAUSE;
+extern TRAIL *e_FTRAIL;
+
+#else
+external(TERM,e_FCALL);
+external(TERM,e_FBASE);
+external(ENV,e_FENV);
+external(ENV,e_FCHOICE);
+farexternal(ATOM,e_FATOM);
+farexternal(CLAUSE,e_FCLAUSE);
+farexternal(TRAIL,e_FTRAIL);
+#endif
+
+#define call(e)        acc(TERM,e_FCALL,e)
+#define base(e)        acc(TERM,e_FBASE,e)
+#define env(e)         acc(ENV,e_FENV,e)
+#define choice(e)      acc(ENV,e_FCHOICE,e)
+#define atomtop(e)     faracc(ATOM,e_FATOM,e)
+#define rule(e)        faracc(CLAUSE,e_FCLAUSE,e)
+#define trail(e)       faracc(TRAIL,e_FTRAIL,e)
+
+/**************************************************************/
+/*
+**  macros
+*/
+/**************************************************************/
+
+
+IMPORT ENV E,CHOICEPOINT;
+IMPORT TERM BE;  /* base(E) */
+#define deref(T)     deref_(T,BE)
+
+IMPORT void out_1(),out_2();
+#if INLINE
+#define deref_(x,b)  { if(name(x)==UNBOUNDT)\
+                        { if(x > HEAPTOP) x=mkfreevar();}\
+                       else { if(name(x)==SKELT) x=offset(x)+b; \
+                              while(name(x)==VART) x=val(x); }}
+#endif
+
+#if ! INLINE
+IMPORT TERM DEREF();
+#define deref_(x,b)    x=DEREF(x,b)
+#endif
+
+#if REALARITH
+#define REAL double
+#define REALSIZE (sizeof(REAL) / sizeof(int))
+IMPORT REAL realval();
+IMPORT TERM mkreal();
+IMPORT string ftoa();
+#endif
+
+#if LONGARITH
+#define LONG long
+#define LONGSIZE (sizeof(LONG) / sizeof(int))
+IMPORT LONG longval();
+IMPORT TERM mklong();
+IMPORT string ltoa();
+#endif
+
+
+#if REALARITH && LONGARITH
+#define is_number(A)    (A==INTT || A==LONGT || A==REALT)
+#define is_integer(A)   (A==INTT || A==LONGT)
+#endif
+
+#if !REALARITH && LONGARITH
+#define is_number(A)    (A==INTT || A==LONGT)
+#define is_integer(A)   (A==INTT || A==LONGT)
+#endif
+
+#if REALARITH && !LONGARITH
+#define is_number(A)    (A==INTT || A==REALT)
+#define is_integer(A)   (A==INTT)
+#endif
+
+#if !REALARITH && !LONGARITH
+#define is_number(A)    (A==INTT)
+#define is_integer(A)   (A==INTT)
+#endif
+
+#define is_heapterm(T)   ( (T) >=HEAPTOP)
+IMPORT  TERM HEAPTOP;
+
+IMPORT boolean UNIFY();
+
+#if INLINE
+extern ATOM ATOMHTOP;
+#define isheapatom(A)   (A && ((A) <=ATOMHTOP))
+#define UNI(X,Y)        UNIFY(1,X,Y,BE,BE,MAXDEPTH)
+#endif
+#if ! INLINE
+IMPORT boolean isheapatom();
+IMPORT boolean UNI();
+#endif
+
+IMPORT void ws( char * ),wi( int ),wc( char ),wq();
+
+IMPORT boolean DEBUGFLAG;
+
+

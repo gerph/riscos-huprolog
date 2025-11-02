@@ -1,0 +1,187 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     **
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+/* system(...), timer(...), cls(...), gotoxy(...), 
+** bdos(...), peek(...), poke(...)
+*/
+
+#include "systems.h"
+#include "types.h"
+#include "atoms.h"
+#include "errors.h"
+#include "files.h"
+
+/*
+EXPORT long TIMER();
+EXPORT boolean FileExist();
+EXPORT void DOCLS(),DOGOTOXY();
+EXPORT boolean call_system(char *);
+*/
+
+IMPORT void TESTATOM(),ARGERROR();
+
+#if !CPM
+boolean call_system(char *command)
+{ 
+#undef system  /* to avoid clash between macro definitions and clib */
+    int system();       /* from clib */
+#if UNIX 
+  return (system(command) !=127); 
+#endif
+#if RISCOS 
+  return (system(command) == 0); 
+#endif
+#if MS_DOS 
+  return (system(command)==0); 
+#endif
+#if VMS
+  return (system(command) !=0); 
+#endif
+}
+#endif
+
+#if RISCOS
+IMPORT long  clock();  /* From CLIB */
+#endif
+
+GLOBAL long TIMER(void)
+/* returns the current system timer normalized to 1/100 sec. */
+{
+#if UNIX || VMS
+ static struct 
+     { long usertime,systime,cusertime,csystime; } UTIME;
+  long T;
+  IMPORT long times(); /* from clib */
+  (void)times(&UTIME);   
+#endif
+#if XENIX286
+  return UTIME.usertime*2l;
+#endif
+#if UNIX && !XENIX286
+  T=UTIME.usertime*5l;
+  return T/3l; 
+#endif
+
+#if RISCOS
+  return  clock();
+#endif
+
+#if VMS
+  return  UTIME.usertime;
+#endif
+
+#if MS_DOS 
+  static union {long far *ptr; struct {unsigned off,seg; }ibm; }trans;
+  long T;
+  trans.ibm.seg=0; trans.ibm.off=0x46c; 
+  T= *(trans.ptr);
+  T=T*55l;
+  return T/10l;
+#endif
+
+#if BIC
+  long T;
+  T=(long)(*((int *)(0xfc0c)));
+  return T+T;
+#endif
+}
+
+GLOBAL boolean FileExist(char *filename)
+{
+#if UNIX || MS_DOS || VMS 
+    extern int access(); /* from clib UNIX, MS_DOS ,VMS */   
+    return (access(filename,0)==0) ;
+#endif
+#if !(UNIX || MS_DOS || VMS)
+    int f;
+    if((f=open(filename,0))>=0) { close(f); return true; }
+    return false;
+#endif
+}
+
+ 
+
+GLOBAL char *s_cls(void)
+{ 
+#if P8000
+    static char ss[]="\033*\036";
+    return ss;
+#endif
+#if VMS || MS_DOS || XENIX286 || SUN3
+    static char ss[]="\033[2J\033[0;0H";
+    return ss;
+#endif
+#if CPM
+    static char ss[]="\014";
+    return ss;
+#endif
+}
+
+GLOBAL char *s_gotoxy(int S, int Z)
+{ 
+#if P8000 
+   static char ss[]= "\033=ZS";
+   ss[2]=Z+32;ss[3]=S+32;
+   return ss;
+#endif
+#if VMS || MS_DOS || XENIX286 || SUN3
+   static char ss[]="\033[YY;XXH";
+   ss[2]= (char)(Z / 10) + '0';
+   ss[3]= (char)(Z % 10) + '0';
+   ss[5]= (char)(S / 10) + '0';
+   ss[6]= (char)(S % 10) + '0';
+   return ss;
+#endif
+#if CPM 
+   static char ss[]= "\033ZS";
+   ss[1]=Z+128;ss[2]=S+128;
+   return ss;
+#endif
+}
+   
+#if  CPM || HACKY
+
+extern TERM A0,A1,A2;
+
+GLOBAL boolean DOPOKE(void)
+{ TERM T;
+  char *addr;
+  if(name(A0)!=INTT) ARGERROR();
+  addr=(char *)ival(A0);
+  T=A1;
+  while(name(T)==CONS_2)
+    { *addr++= (char)(INTVALUE(arg1(T))&0xff); T=arg2(T); }
+  TESTATOM(NIL_0,T);
+  return true;
+}
+
+GLOBAL boolean DOPEEK(void)
+{ TERM T,TT;
+  int i;
+  char *addr;
+  addr=(char *)INTVALUE(A0);
+  i=INTVALUE(A1);
+  T=TT=mkatom(NIL_0);
+  while(i-- >0)
+  { name(TT)=CONS_2;
+    son(TT)=mk2sons(INTT,(TERM)(*addr++),NIL_0,nil_term);  
+    TT=br(son(TT)); 
+  }
+  return UNI(A2,T); 
+}
+
+#endif
+

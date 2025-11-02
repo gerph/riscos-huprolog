@@ -1,0 +1,1136 @@
+
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     ** 
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1988      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+#include "systems.h"
+#include "types.h"
+#include "errors.h"
+#include "atoms.h"
+
+#if REALARITH
+IMPORT REAL exp(),log(),log10(),sqrt();  /* from mathlib   */
+IMPORT REAL sin(),cos(),tan(),atan();    /* from mathlib   */
+IMPORT REAL acos(),atan(),floor(),ceil();/* from mathlib   */ 
+IMPORT REAL pow(),asin();                /* from mathlib   */
+#endif
+IMPORT void notecl(),destroycl();
+IMPORT boolean UNIFY(),INTRES(),LONGRES();
+IMPORT TERM A0,A1,BE;                    /* from evalpreds.c*/
+IMPORT boolean DOEQUAL();                /* from evalpreds.c*/
+IMPORT ATOM LOOKATOM();                  /* from atomtable.c*/
+IMPORT ENV E;                            /* from unify.c */
+IMPORT void freeterms();                 /* from manager.c */
+IMPORT void ARGERROR(),ERROR();          /* from linebufffer.c */
+IMPORT void WRITEOUT();                  /* from writeout.c */
+IMPORT TERM SKELETON();                  /* from database.c */
+IMPORT int VARCT,VARTOP;                 /* from database.c  */
+IMPORT TERM GLOTOP,HEAPTOP;              /* from manager.c  */
+IMPORT boolean LONGRES(),testheap();
+IMPORT ATOM copyatom();
+IMPORT CLAUSE ADDCLAUSE();
+IMPORT TERM CALLX;
+IMPORT boolean REDUCEFLAG;
+IMPORT ATOM modify();
+
+#if SYMBOLARITH
+FORWARD TERM substsim(),symbred(),pind3_red(),of_red();
+#endif
+/*
+EXPORT int INTVALUE(TERM);
+EXPORT boolean DODASS(),DOACOMP(),DOIS();
+EXPORT boolean FpAbort,DOREDUCE();
+EXPORT TERM DOEVAL();
+*/
+
+#if REALARITH
+#define PI_CONST           3.1415926535
+#define E_CONST            2.7182818284
+#if VMS
+boolean FpAbort;
+#endif
+#endif
+
+
+LOCAL int ISDEPTH=0;
+
+/* finite state evaluation of arithmetic expressions */
+/* arithmetic-stack is placed on global stack */
+
+#if REALARITH && LONGARITH
+typedef struct { boolean ir;
+                 union { REAL rrec; LONG lrec; }arithvalue;
+               } ARITHTYPE;
+#define isreal(av)         ((av)->ir)
+#define realf(av)          ((av)->arithvalue.rrec)
+#define longf(av)          ((av)->arithvalue.lrec)
+
+LOCAL LONG lis(ARITHTYPE *AT)
+{ if(isreal(AT)){ISDEPTH=0;ERROR(STDFUNCARGE);}return longf(AT); }
+LOCAL REAL ris(ARITHTYPE *AT)
+{ if(isreal(AT)) return realf(AT); else return (REAL)longf(AT); }
+#endif
+
+#if REALARITH && ! LONGARITH
+typedef struct { boolean ir;
+                 union { REAL rrec; int lrec; }arithvalue;
+               } ARITHTYPE;
+#define isreal(av)         ((av)->ir)
+#define realf(av)          ((av)->arithvalue.rrec)
+#define longf(av)          ((av)->arithvalue.lrec)
+
+LOCAL int lis(ARITHTYPE *AT)
+{ if(isreal(AT)){ISDEPTH=0;ERROR(STDFUNCARGE);}return longf(AT); }
+LOCAL REAL ris(ARITHTYPE *AT)
+{ if(isreal(AT)) return realf(AT); else return (REAL)longf(AT); }
+#endif
+
+#if !REALARITH && LONGARITH
+typedef LONG ARITHTYPE;
+#define longf(av)          (*av)
+#define lis(at)            longf(at)
+#endif
+
+#if !REALARITH && !LONGARITH
+typedef int ARITHTYPE;
+#define longf(av)         (*av)
+#define lis(at)           longf(at)
+#endif
+
+LOCAL boolean assign(ARITHTYPE *ap, TERM t)
+{ ATOM A;
+             A=name(t);
+
+#if LONGARITH
+             if(A==INTT) longf(ap)= (LONG)ival(t);
+             else if(A==LONGT) longf(ap)=longval(t);
+#endif
+#if ! LONGARITH
+             if(A==INTT) longf(ap)=ival(t);
+#endif
+#if REALARITH
+             else if(A==REALT)
+              { realf(ap)=realval(t);isreal(ap)=true; }
+#endif
+             else return false;
+           return true;
+}
+
+/* compute evaluates operation A on args *at1 and *at2 */
+/* the result is in *ap                                */
+LOCAL boolean compute(ATOM A, ARITHTYPE *at1, ARITHTYPE *at2, 
+                      ARITHTYPE *ap, boolean stdfunc)
+{
+#if REALARITH
+  isreal(ap)=false;
+switch(A)
+{
+case MAXAR_0: longf(ap)= (long)MAXARITY;goto intret;
+case MAXDEP_0: longf(ap)= (long)MAXDEPTH;goto intret;
+#if LONGARITH
+case MAXINT_0: longf(ap)=maxlong;goto intret;
+case MININT_0: longf(ap)=minlong;goto intret;
+#endif
+#if !LONGARITH
+case MAXINT_0: longf(ap)=maxint;goto intret;
+case MININT_0: longf(ap)=minint;goto intret;
+#endif
+case PLUS_2: if(isreal(at1)||isreal(at2))
+              {realf(ap)=ris(at1) + ris(at2); goto realret;}
+              longf(ap)=lis(at1) + lis(at2); goto intret;
+case MINUS_2: if(isreal(at1)||isreal(at2))
+               {realf(ap)=ris(at1) - ris(at2); goto realret;}
+               longf(ap)=lis(at1) - lis(at2); goto intret;
+case TIMES_2: if(isreal(at1)||isreal(at2))
+                {realf(ap)=ris(at1) * ris(at2); goto realret;}
+                longf(ap)=lis(at1) * lis(at2); goto intret;
+case DIVIDE_2: if(ris(at2)==0.0)ERROR(DIV0E);
+                realf(ap)=ris(at1) / ris(at2); goto realret;
+case MINUS_1: if(isreal(at1)){realf(ap)= -ris(at1); goto realret;}
+               longf(ap)= -lis(at1); goto intret;
+case PI_0:       realf(ap)=PI_CONST;goto realret;
+case E_0:        realf(ap)=E_CONST;goto realret;
+case REAL_1:     realf(ap)=ris(at1); goto realret;
+case EXP_1:      realf(ap)=exp(ris(at1)); goto realret;
+case LN_1:       realf(ap)=log(ris(at1)); goto realret;
+case LOG10_1:    realf(ap)=log10(ris(at1)); goto realret;
+case SQRT_1:     realf(ap)=sqrt(ris(at1)); goto realret;
+case SIN_1:      realf(ap)=sin(ris(at1)); goto realret;
+case COS_1:      realf(ap)=cos(ris(at1)); goto realret;
+case TAN_1:      realf(ap)=tan(ris(at1)); goto realret;
+case ASIN_1:     realf(ap)=asin(ris(at1)); goto realret;
+case ACOS_1:     realf(ap)=acos(ris(at1)); goto realret;
+case ATAN_1:     realf(ap)=atan(ris(at1)); goto realret;
+case FLOOR_1:    realf(ap)=floor(ris(at1)); goto realret;
+case CEIL_1:     realf(ap)=ceil(ris(at1)); goto realret;
+case POWER_2:    realf(ap)=pow(ris(at1),ris(at2)); goto realret;
+case LSHIFT_2:   longf(ap)=lis(at1) << lis(at2); goto intret;
+case RSHIFT_2:   longf(ap)=lis(at1) >> lis(at2); goto intret;
+case BITAND_2:   longf(ap)=lis(at1) & lis(at2); goto intret;
+case BITOR_2:    longf(ap)=lis(at1) | lis(at2); goto intret;
+case BITNEG_1:   longf(ap)= ~lis(at1); goto intret;
+case AND_2:      longf(ap)=lis(at1) && lis(at2); goto intret;
+case OR_2:       longf(ap)=lis(at1) || lis(at2); goto intret;
+case NEG_1:      longf(ap)= !lis(at1); goto intret;
+#if LONGARITH
+case ENTIER_1:   longf(ap)= (LONG)floor(ris(at1)); goto intret;
+#endif
+#if ! LONGARITH
+case ENTIER_1:   longf(ap)= (int)floor(ris(at1)); goto intret;
+#endif
+case IDIV_2: if(lis(at2)==0l)ERROR(DIV0E);
+                 longf(ap)=lis(at1) / lis(at2); goto intret;
+case MOD_2:  if(lis(at2)==0l)ERROR(DIV0E);
+                longf(ap)=lis(at1) % lis(at2); goto intret;
+default: 
+                if(stdfunc)ERROR(UNDEFFUNCE);
+                return false;
+}
+realret: isreal(ap)=true;
+intret:  return true;
+#endif
+#if ! REALARITH
+switch(A)
+{
+case MAXAR_0: longf(ap)= (long)MAXARITY;goto intret;
+case MAXDEP_0: longf(ap)= (long)MAXDEPTH;goto intret;
+#if LONGARITH
+case MAXINT_0: longf(ap)=maxlong;goto intret;
+case MININT_0: longf(ap)=minlong;goto intret;
+#endif
+#if !LONGARITH
+case MAXINT_0: longf(ap)=maxint;goto intret;
+case MININT_0: longf(ap)=minint;goto intret;
+#endif
+case PLUS_2:     longf(ap)=lis(at1) + lis(at2); goto intret;
+case MINUS_2:    longf(ap)=lis(at1) - lis(at2); goto intret;
+case TIMES_2:    longf(ap)=lis(at1) * lis(at2); goto intret;
+case MINUS_1:    longf(ap)= -lis(at1); goto intret;
+case LSHIFT_2:   longf(ap)=lis(at1) << lis(at2); goto intret;
+case RSHIFT_2:   longf(ap)=lis(at1) >> lis(at2); goto intret;
+case BITAND_2:   longf(ap)=lis(at1) & lis(at2); goto intret;
+case BITOR_2:    longf(ap)=lis(at1) | lis(at2); goto intret;
+case BITNEG_1:   longf(ap)= ~lis(at1); goto intret;
+case AND_2:      longf(ap)=lis(at1) && lis(at2); goto intret;
+case OR_2:       longf(ap)=lis(at1) || lis(at2); goto intret;
+case NEG_1:      longf(ap)= !lis(at1); goto intret;
+case IDIV_2:     if(lis(at2)==0l)ERROR(DIV0E);
+                 longf(ap)=lis(at1) / lis(at2); goto intret;
+case MOD_2:      if(lis(at2)==0l)ERROR(DIV0E);
+                 longf(ap)=lis(at1) % lis(at2); goto intret;
+default: 
+                if(stdfunc)ERROR(UNDEFFUNCE);
+                return false;
+}
+intret:  return true;
+#endif
+}
+
+GLOBAL boolean DOREDUCE(TERM B0, TERM B1, boolean eval)
+{ ATOM A;
+  TERM T1,T2;
+  ARITHTYPE atR,at1,at2;
+#if REALARITH
+   isreal(&at1)=isreal(&at2)=false;
+#endif
+   /* deref(B1); only if eval */
+   A=name(B1);
+   if(A < FUNCNAME)goto notreduce;
+  
+   if(A==QUOTE_1){B1=arg1(B1);goto termreduce;}
+   switch(A)
+   { 
+	case PLUS_2: case MINUS_2: case TIMES_2: 
+	case LSHIFT_2: case RSHIFT_2: case BITAND_2:
+	case BITOR_2: case AND_2: case OR_2: case IDIV_2: case MOD_2:  
+#if REALARITH
+	case DIVIDE_2: case POWER_2: 
+#endif  
+             T2=arg2(B1);
+             if(!assign(&at2,T2)) goto notreduce;
+    
+	case MINUS_1: case BITNEG_1: case NEG_1: 
+#if REALARITH
+	case FLOOR_1: case CEIL_1: case ENTIER_1: case EXP_1:
+	case LN_1: case LOG10_1: case SQRT_1: case SIN_1: 
+	case COS_1: case TAN_1: case ASIN_1: case ACOS_1: 
+	case ATAN_1: case REAL_1: 
+#endif
+	     T1=arg1(B1); 
+             if(!assign(&at1,T1)) goto notreduce;
+
+	case MAXINT_0: case MININT_0: case MAXAR_0: case MAXDEP_0:
+#if  REALARITH
+	case E_0: case PI_0: 
+#endif
+
+     break;
+
+    default:goto notreduce;
+   }
+   if(compute(A,&at1,&at2,&atR,false))
+    {
+#if REALARITH
+      if(isreal(&atR)) return UNI(B0,mkreal(realf(&atR)));
+#endif
+#if LONGARITH
+      return LONGRES(B0,longf(&atR));
+#endif
+#if !LONGARITH
+     return INTRES(B0,longf(&atR));
+#endif
+    }
+
+notreduce:
+   if(eval)return false;
+termreduce:
+   UNI(B0,B1);
+   return true;
+}
+
+/*
+#define push(v,t)        {name(HT)= (ATOM)v;son(HT)=t;\
+                  if(dec_term(HT)<=GLOTOP)ERROR(LOCALSPACEE);}
+#define pop()            {inc_term(HT);PVAR= (TERM)name(HT);\
+                  PTERM=son(HT);}
+*/
+#define push(v,t)    {name(HT)=VART; val(HT)=v; dec_term(HT); \
+		      name(HT)=VART; val(HT)=t;\
+                  if(dec_term(HT)<=GLOTOP)ERROR(LOCALSPACEE);}
+#define pop()  {inc_term(HT);PTERM=val(HT);inc_term(HT);PVAR=val(HT);}
+
+LOCAL TERM NCP,PVAR,PTERM,HT;
+
+LOCAL void nextp(TERM V)
+{ name(PVAR)=VART; val(PVAR)=V;
+  pop();
+}
+
+LOCAL void nextcall(TERM C)
+{ NCP=mk2sons(name(C),son(C),GOTO_1,NCP);
+  pop();
+}
+
+LOCAL void nexte(TERM C, TERM NV, TERM NT)
+{ name(PVAR)=VART; val(PVAR)=son(C);
+  NCP=mk2sons(name(C),son(C),GOTO_1,NCP);
+  PVAR=NV; PTERM=NT; /* explicit pop */
+}
+
+GLOBAL TERM DOEVAL(TERM CALLP, ENV ENVP)
+{
+  register TERM H;
+  TERM HH,H1,H2,ONCP;
+  ATOM AA1,AA2,PA,CA;
+  int i;
+  TERM T1,T2;
+ 
+  ONCP=NCP=br(CALLP);
+  E=ENVP; 
+  BE=base(ENVP);
+  PTERM=mkfreevar(); UNI(PTERM,arg2(CALLP));
+  PVAR=arg1(CALLP);
+  HT=HEAPTOP;
+  while(HT <=HEAPTOP)
+  { deref(PTERM);
+    if((PA=name(PTERM))<NORMATOM)
+        { nextp(PTERM); continue; }
+    CA=copyatom(LOOKATOM(PA,arity(PA)+1));
+    if(non_nil_clause(clause(CA)) ||
+	  class(CA)==EVALP || class(CA)==BTEVALP)
+      { /* executable function f(X,a1,...,aN) */
+        if(!arity(PA) && non_nil_clause(clause(CA)) 
+	      && name(body(clause(CA)))==nil_atom)
+           /* direct access to the value of simple global variables */
+           { nextp(son(head(clause(CA)))); continue; }
+        H1=stackterms(arity(CA)); name(H1)=VART; son(H1)=PVAR;
+        H2=br(H1); H=son(PTERM);
+        for(i=0;i<arity(PA);i++)
+        {
+          name(H2)=VART;son(H2)=H;
+          next_br(H2);next_br(H);
+        }
+        /* putcall: f(X,a1,..,aN) ; X=f(a1,..,aN)  */
+        nextcall(mkfunc(SEMI_2, mk2sons(CA,H1,
+                  ISEQ_2, mk2sons(VART,PVAR,VART,PTERM))));
+        continue;
+      }
+          
+    switch(PA)
+    {
+#if REALARITH
+         case PI_0: nextp(mkreal(PI_CONST));break;
+         case E_0: nextp(mkreal(E_CONST));break;
+#endif
+         case MAXAR_0: nextp(mkint(MAXARITY));break;
+         case MAXDEP_0: nextp(mkint(MAXDEPTH));break;
+#if LONGARITH
+         case MAXINT_0: nextp(mklong(maxlong));break;
+         case MININT_0: nextp(mklong(minlong));break;
+#endif
+#if ! LONGARITH
+         case MAXINT_0: nextp(mkint(maxint));break;
+         case MININT_0: nextp(mkint(minint));break;
+#endif
+
+	 case MINUS_1: case BITNEG_1: case NEG_1: 
+#if REALARITH
+	 case FLOOR_1: case CEIL_1: case ENTIER_1: case EXP_1: 
+	 case LN_1: case LOG10_1: case SQRT_1: case SIN_1: 
+	 case COS_1: case TAN_1: case ASIN_1: case ACOS_1:
+	 case ATAN_1:  case REAL_1:
+#endif 
+              T1=arg1(PTERM);
+              AA1=name(T1);
+              if(is_number(AA1))
+               { DOREDUCE(PVAR,PTERM,true); pop(); }
+              else 
+               { H1=mkfreevar();
+                nexte(mkfunc(REDUCE_2,
+                       mk2sons(UNBOUNDT,nil_term,PA,H1)),H1,T1);
+                }
+              break;
+
+
+	case PLUS_2: case MINUS_2: case TIMES_2: 
+	case LSHIFT_2: case RSHIFT_2: case BITAND_2: 
+	case BITOR_2: case AND_2: case OR_2: case IDIV_2: case MOD_2:  
+#if REALARITH
+	case DIVIDE_2:  case POWER_2: 
+#endif 
+	       T1=arg1(PTERM); T2=arg2(PTERM);
+	       AA1=name(T1); AA2=name(T2);
+	       if(is_number(AA1))
+	          if(is_number(AA2))
+	            { DOREDUCE(PVAR,PTERM,true); pop(); }
+	          else
+	           { H2=mkfreevar();
+	             nexte(mkfunc(REDUCE_2,mk2sons(UNBOUNDT,nil_term,PA,
+	                      mk2sons(AA1,son(T1),VART,H2))),H2,T2);
+	            }
+	       else
+	          if(is_number(AA2))
+	            {H1=mkfreevar();
+	             nexte(mkfunc(REDUCE_2,mk2sons(UNBOUNDT,nil_term,PA,
+	                      mk2sons(VART,H1,name(T2),son(T2)))),H1,T1);
+	            }
+	          else
+	            {H1=mkfreevar(); H2=mkfreevar();
+	             nexte(mkfunc(REDUCE_2,mk2sons(UNBOUNDT,nil_term,PA,
+	                      mk2sons(VART,H1,VART,H2))),H1,T1);
+	             push(H2,T2);
+	            }
+	       break;
+
+#if SYMBOLARITH
+	    case SUBST_3:
+           { TERM jj,j; 
+              j=jj=stackterms(2);
+              T1=arg2(PTERM); T2=arg3(PTERM);
+              while(name(T1)==CONS_2 && name(T2)==CONS_2)
+                { 
+                  name(jj)=name(arg1(T1)); son(jj)=nil_term;
+		  next_br(jj); name(jj)=VART; son(jj)=arg1(T2);
+                  jj=stackterms(2); T1=arg2(T1);T2=arg2(T2);
+                }
+              if(name(T1)!=NIL_0 || name(T2) !=NIL_0)goto noteval;
+              name(jj)=nil_atom; son(jj)=nil_term;
+              H1=mkfreevar();
+              nextp(substsim(arg1(PTERM),j));
+              break;
+           }
+
+	/* constructor operations */
+	    case LAMBDA_1:
+		case INL_1:
+		case INR_1:
+	    case COMMA_2:
+		case CONS_2:
+		case NIL_0:
+		   goto noteval;
+	        case PIND_3:
+	           nextp(pind3_red(PTERM));break;
+	        case OF_2:
+	           nextp(of_red(PTERM));break;
+
+	/* selector operations */
+	        case QUOTE_1:
+		case EVAL_1: 
+		case SUCC_1:
+		case PRED_1:
+		case SPREAD_2:
+		case LISTIND_3:
+		case IND_4:
+		case INT_EQ_4:
+		case DECIDE_3:
+		case RECIND_3:
+	           nextp(symbred(PTERM));break;
+#endif
+
+		default:
+		noteval:
+		       nextp(PTERM);
+    }/* switch */
+   } /* while */
+ /* erase simple reduce-calls */
+ /* restore first callp for trace only */
+  H=NCP;
+  H1=NCP=mk2sons(name(CALLP),son(CALLP),GOTO_1,NCP);
+  while(H !=ONCP)
+  { if(name(H)==REDUCE_2)
+      {
+       HH=arg2(H);
+       if(DOREDUCE(son(H),HH,true))
+         son(br(H1))=son(br(H));
+       else
+         H1=H;
+      }
+    next_br(H); H=son(H); /* H=son(br(H));*/
+  }
+  return NCP;
+}
+
+LOCAL void iseval(TERM t, ARITHTYPE *ap)
+{
+  ARITHTYPE at1,at2;
+  register TERM s;
+  ATOM a;
+
+   if(ISDEPTH++ > MAXDEPTH){ISDEPTH=0;ERROR(DEPTHE);}
+#if REALARITH
+   isreal(ap)=isreal(&at1)=isreal(&at2)=false;
+#endif
+   if((a=name(t))<NORMATOM) if(assign(ap,t))goto ret;
+                        else ERROR(STDFUNCARGE);
+   switch(arity(a))
+   { 
+     case 2: s=arg2(t); if(!assign(&at2,s)) iseval(s,&at2);
+     case 1: s=arg1(t); if(!assign(&at1,s)) iseval(s,&at1);
+     case 0: break;
+     default:ERROR(UNDEFFUNCE);
+   }
+     (void)compute(a,&at1,&at2,ap,true);
+ret: ISDEPTH--;
+    return;
+}
+
+/* returns integer-result of evaluation of expression T */
+GLOBAL int INTVALUE(TERM T)
+{ ARITHTYPE a;
+  deref(T);iseval(T,&a);
+#if REALARITH && LONGARITH
+  if(isreal(&a) || (maxint < longf(&a)) || (minint > longf(&a))) 
+                ERROR(BADEXPE);  
+#endif
+#if REALARITH && ! LONGARITH
+  if(isreal(&a)) ERROR(BADEXPE);  
+#endif
+#if ! REALARITH && LONGARITH
+  if((maxint < longf(&a)) || (minint > longf(&a))) ERROR(BADEXPE);  
+#endif
+  return (int)longf(&a);
+}
+
+#if SYMBOLARITH
+GLOBAL TERM SUBSTITUTION(TERM X, TERM V, TERM T)
+{
+     TERM LL,L; 
+      L=LL=stackterms(2);
+      while(name(V)==CONS_2 && name(T)==CONS_2)
+	{ 
+	  name(LL)=name(arg1(V)); son(LL)=nil_term;
+	  next_br(LL); name(LL)=VART; son(LL)=arg1(T);
+	  LL=stackterms(2); V=arg2(V);T=arg2(T);
+	}
+      if(name(V)!=NIL_0 || name(T) !=NIL_0) ARGERROR();
+      name(LL)=nil_atom; son(LL)=nil_term;
+      return substsim(X,L);
+}
+#endif
+
+GLOBAL boolean DOACOMP(void)
+{
+#if REALARITH
+  REAL R1,R2;
+  boolean is_real=false;
+#endif
+#if LONGARITH
+  LONG L1,L2;
+#endif
+#if !LONGARITH
+  int L1,L2;
+#endif
+ TERM H1,H2;
+ boolean is_term1=false,is_term2=false;
+
+ CALLX=A0; 
+ H1=arg1(A0); H2=arg2(A0);
+#if REALARITH && LONGARITH
+ switch(name(H1))
+  { 
+    case REALT:   R1=realval(H1);is_real=true;break;
+    case INTT:    R1= (REAL)(L1= (LONG)ival(H1));break;
+    case LONGT:   R1= (REAL)(L1=longval(H1));break;
+    case 0: default: is_term1=true;
+  }
+ switch(name(H2))
+  { 
+    case REALT:   R2=realval(H2);is_real=true;break;
+    case INTT:    R2= (REAL)(L2= (LONG)ival(H2));break;
+    case LONGT:   R2= (REAL)(L2=longval(H2));break;
+    case 0: default: is_term2=true; 
+  }
+#endif
+#if REALARITH && ! LONGARITH
+ switch(name(H1))
+  { 
+    case REALT:   R1=realval(H1);is_real=true;break;
+    case INTT:    R1= (REAL)(L1=ival(H1));break;
+    case 0: default: is_term1=true;
+  }
+ switch(name(H2)) 
+  { 
+    case REALT:   R2=realval(H2);is_real=true;break; 
+    case INTT:    R2= (REAL)(L2=ival(H2));break;
+    case 0: default: is_term2=true;
+  }
+#endif
+#if ! REALARITH && LONGARITH
+ switch(name(H1))
+  { 
+    case INTT:    L1= (LONG)ival(H1);break;
+    case LONGT:   L1=longval(H1);break;
+    case 0: default: is_term1=true;
+  }
+ switch(name(H2))
+  { 
+    case INTT:    L2= (LONG)ival(H2);break;
+    case LONGT:   L2=longval(H2);break;
+    case 0: default: is_term2=true;
+  }
+#endif
+#if ! REALARITH && ! LONGARITH
+ if (name(H1)==INTT) L1=ival(H1); else is_term1=true;
+ if (name(H2)==INTT) L2=ival(H2); else is_term2=true;
+#endif
+#if REALARITH
+if(is_real)
+ switch(name(A0))
+ {
+   default: ARGERROR();
+   case EQ_2: if (is_term1 || is_term2) return UNI(H1,H2); 
+	      return R1==R2;
+   case NE_2: if (is_term1 || is_term2) return !UNI(H1,H2);
+	      return R1 !=R2;
+   case GT_2: if (is_term1 || is_term2) ARGERROR();
+	      return R1 > R2;
+   case LT_2: if (is_term1 || is_term2) ARGERROR();
+	      return R1 < R2;
+   case GE_2: if (is_term1 || is_term2) ARGERROR();
+	      return R1 >=R2;
+   case LE_2: if (is_term1 || is_term2) ARGERROR();
+	      return R1 <=R2;
+ }
+#endif
+ switch(name(A0))
+ {
+   default: ARGERROR();
+   case EQ_2: if (is_term1 || is_term2) return UNI(H1,H2);
+	      return L1==L2;
+   case NE_2: if (is_term1 || is_term2) return !UNI(H1,H2);
+	      return L1 !=L2;
+   case GT_2: if (is_term1 || is_term2) ARGERROR();
+	      return L1 > L2;
+   case LT_2: if (is_term1 || is_term2) ARGERROR();
+	      return L1 < L2;
+   case GE_2: if (is_term1 || is_term2) ARGERROR();
+	      return L1 >=L2;
+   case LE_2: return L1 <=L2;
+ }
+}
+
+GLOBAL boolean DOIS(TERM L, TERM R)
+{ ARITHTYPE a;
+  iseval(R,&a);
+#if REALARITH
+  if(isreal(&a)) return UNI(L,mkreal(realf(&a)));
+#endif
+#if LONGARITH
+  return LONGRES(L,longf(&a));
+#endif
+#if ! LONGARITH
+  return INTRES(L,longf(&a));
+#endif
+}
+
+GLOBAL boolean DODASS(void)
+{
+static TERM DEST,T,RT,H1,H2,H;
+static CLAUSE CL,CLL;
+static ATOM AT,AT1;
+int ARITY;
+static boolean DONE;
+  if(name(A0) < NORMATOM)  return UNI(A0,A1); 
+  DEST=A0;
+  DONE=false;
+  CLL=nil_term;
+  AT=name(DEST);  
+  ARITY=arity(AT)+1;
+  if (ARITY==1) RT=mkatom(AT);
+  AT1=copyatom(LOOKATOM(AT,ARITY));
+  for(CL=clause(AT1);non_nil_clause(CL);) 
+    if(name(body(CL))==nil_atom)
+      { T=head(CL); 
+        if (ARITY>1) RT=mkfunc(AT,br(son(T)));
+        if(DOEQUAL(RT,DEST,MAXDEPTH))
+           if(DONE)
+             { CLAUSE CL0;
+	       CL0=nextcl(CL);
+               if(non_nil_clause(CLL)) nextcl(CLL)=CL0;
+               else clause(AT1)=CL0;
+               if(testheap(CL)) notecl(CL); else destroycl(CL);
+	       CL=CL0;
+              }
+           else
+             {
+               DONE=true;
+               H1=son(T); 
+               if(name(H1)>FUNCNAME)
+                   freeterms(arity(name(H1)),son(H1));
+               if((name(H1)=name(A1))==INTT)
+                    { ival(H1)=ival(A1); }
+               else { VARTOP=VARCT=0;
+                      son(H1)=SKELETON(name(A1),son(A1)); }
+	       CLL=CL; CL=nextcl(CL);
+              }
+	else { CLL=CL; CL=nextcl(CL); }
+       }
+  if(DONE)return true;
+  H1=stackterms(ARITY); name(H1)=VART; val(H1)=A1;
+  H2=br(H1); H=son(DEST);
+  while(--ARITY>0)
+    { name(H2)=VART;son(H2)=H; H2=br(H2); H=br(H); }
+  A0=mkfunc(AT1,H1);
+  CL=ADDCLAUSE(A0);
+  nextcl(CL)=clause(AT1); clause(AT1)=CL;
+  return true;
+}
+
+#if SYMBOLARITH
+
+LOCAL TERM MAC_HLP;
+
+LOCAL TERM mkl1(ATOM AT1, TERM S1)
+{   TERM H,H1;
+    H1=H=stackterms(3);
+    name(H1)=AT1;son(H1)=nil_term;
+    next_br(H1); name(H1)=VART; son(H1)=S1;
+    next_br(H1); name(H1)=nil_atom;son(H1)=nil_term; 
+    return H;
+}
+
+LOCAL TERM mkl2(ATOM AT1, TERM S1, ATOM AT2, TERM S2)
+{   register TERM H,H1;
+    H1=H=stackterms(5);
+    name(H1)=AT1; son(H1)=nil_term;
+    next_br(H1); name(H1)=VART; son(H1)=S1;
+    next_br(H1); name(H1)=AT2; son(H1)=nil_term;
+    next_br(H1); name(H1)=VART; son(H1)=S2;
+    next_br(H1); name(H1)=nil_atom; son(H1)=nil_term;
+    return H;
+}
+
+LOCAL TERM mkl3(ATOM AT1, TERM S1, ATOM AT2, TERM S2, ATOM AT3, 
+                TERM S3)
+{   register TERM H,H1;
+	H1=H=stackterms(7);
+	name(H1)=AT1; son(H1)=nil_term;
+	next_br(H1); name(H1)=VART; son(H1)=S1;
+	next_br(H1); name(H1)=AT2; son(H1)=nil_term;
+	next_br(H1); name(H1)=VART; son(H1)=S2;
+	next_br(H1); name(H1)=AT3; son(H1)=nil_term;
+	next_br(H1); name(H1)=VART; son(H1)=S3;
+	next_br(H1); name(H1)=nil_atom; son(H1)=nil_term;
+	return H;
+}
+
+#define getbound(A,HH)  if (name(HH)!=COLON_2) return H;\
+                        A=name(arg1(HH));\
+                        if (arity(A)||A<NORMATOM) return H;\
+                        HH=arg2(HH);
+
+#define check2(HH,C)	if(C) {HH=symbred(HH);if(C) break;}
+
+TERM symbred(TERM H)
+  { TERM H1,H2;
+    ATOM N,N1,N2;
+    deref(H);
+    N=name(H);
+    switch(N)
+    {
+      case INTT:
+      case UNBOUNDT:
+           return H;
+      case RECIND_3:
+           H1=arg1(H);
+	   check2(H1,name(H1)!=INL_1 && name(H1)!=INR_1);
+           if(name(H1)==INL_1)
+           { H2=arg2(H);
+	     getbound(N1,H2);
+             return symbred(substsim(H2,mkl1(N1,arg1(H1))));
+           }
+           if(name(H1)==INR_1)
+           { TERM T;
+             H2=arg3(H);
+	     getbound(N1,H2);
+	     getbound(N2,H2);
+             T=stackterms(3);
+             name(T)=N1; son(T)=nil_term; 
+             name(br(T))=COLON_2; son(br(T))=son(arg2(H));
+             name(br(br(T)))=COLON_2; son(br(br(T)))=son(arg3(H));
+	     H=mkfunc(LAMBDA_1,
+                  mkfunc(COLON_2,mk2sons(N1,nil_term,RECIND_3,T)));
+             return substsim(H2,mkl2(N1,H,N2,arg1(H1)));
+           }
+      case QUOTE_1:
+           return arg1(H); 
+      case EVAL_1:
+           return symbred(symbred(arg1(H))); 
+      case OF_2: 
+	   return of_red(H);
+      case SPREAD_2:
+           H1=arg1(H);
+	   check2(H1,name(H1)!=COMMA_2);
+           H2=arg2(H);
+	   getbound(N1,H2);
+	   getbound(N2,H2);
+           H=substsim(H2,mkl2(N1,arg1(H1),N2,arg2(H1)));
+           break;
+     case DECIDE_3:
+           H1=arg1(H);
+	   check2(H1,name(H1)!=INL_1 && name(H1)!=INR_1);
+           if(name(H1)==INL_1)H2=arg2(H);
+           else H2=arg3(H);
+	   getbound(N1,H2);
+           H=substsim(H2,mkl1(N1,arg1(H1)));
+           break;
+    case COMMA_2:
+    case CONS_2:
+           return mkfunc(N,mk2sons(VART,symbred(arg1(H)),VART,symbred(arg2(H))));
+    case LAMBDA_1:
+    case NIL_0: 
+	   return H;
+    case SUCC_1:
+	   H=symbred(arg1(H));
+	   if (name(H)==PRED_1) return arg1(H); 
+	   /* else if (name(H)==INTT) H=mkint(ival(H)+1); */
+           else return mkfunc(SUCC_1,mkfunc(VART,H));
+    case PRED_1:
+	   H=symbred(arg1(H));
+	   if (name(H)==SUCC_1) return arg1(H); 
+	   /* else if (name(H)==INTT) H=mkint(ival(H)-1); */
+           return mkfunc(PRED_1,mkfunc(VART,H));
+    case INL_1:
+    case INR_1:
+           return mkfunc(N,mkfunc(VART,symbred(arg1(H))));
+    case INT_EQ_4:
+      { TERM L,R,T;
+	L=symbred(arg1(H)); R=symbred(arg2(H));
+	if (name(L)==INTT && name(R)==INTT)
+	{ if (ival(L)==ival(R)) H=symbred(arg3(H)); 
+	  else H=symbred(arg4(H));
+	  break;
+	}
+	T=H1=stackterms(4);
+	name(H1)=VART; val(H1)=L; next_br(H1);
+	name(H1)=VART; val(H1)=R; next_br(H1);
+	name(H1)=VART; val(H1)=arg3(H); next_br(H1);
+	name(H1)=VART; val(H1)=arg4(H); 
+        return mkfunc(N,T);
+      }
+    case IND_4:
+      { ATOM LAST,I;
+        TERM desc;
+        int n, ii, sign;
+           H1=arg1(H);
+	   check2(H1,name(H1)!=INTT);
+           ii=ival(H1);
+           if(ii==0) return symbred(arg3(H)); 
+           if(ii<0){ desc=arg2(H); sign= -1; }
+           else { desc=arg4(H); sign=1; }
+	   getbound(I,desc);
+	   getbound(LAST,desc);
+           H=arg3(H);
+           H2=mkint(98);
+           for(n=1;n<=ii;n +=sign)
+            {
+             ival(H2)=n;
+             H=substsim(desc,mkl2(LAST,H,I,H2));
+             if(name(H) > NORMATOM && DOREDUCE(H1=mkfreevar(),H,true))
+                    {H=H1;deref(H);}
+            }
+           return H;
+           break;
+      }
+
+     case PIND_3: return pind3_red(H); 
+
+     case LISTIND_3:
+      {ATOM N3;
+       TERM ST,HH;
+        H1=arg1(H);
+        if(name(H1)==NIL_0) return arg2(H); 
+        if(name(H1)!=CONS_2)
+        {
+          H1=symbred(H1);
+	  if(name(H1)==NIL_0) return arg2(H);
+          if(name(H1)!=CONS_2) return H;
+        }
+        H2=arg3(H);
+	getbound(N1,H2);
+	getbound(N2,H2);
+	getbound(N3,H2);
+        HH=ST=stackterms(1);
+        while(name(H1)==CONS_2)
+        {
+          son(ST)=H1;
+          H1=arg2(H1); ST=stackterms(1);
+        }
+        dec_term(ST);
+        if(name(H1)==NIL_0)H=arg2(H);
+        else
+         { TERM T;/*  fehler!!!!! */
+          T=stackterms(3);
+          name(T)=name(br(T))=name(br(br(T)))=VART;
+          son(T)=H1; son(br(T))=arg2(H);
+          son(br(br(T)))=arg3(H);
+          H=mkfunc(LISTIND_3,T);
+         }
+        while(ST >=HH)
+        {
+          H=substsim(H2,mkl3(N1,arg1(son(ST)),  /* list head */
+                              N2,arg2(son(ST)),  /* list rest */
+                              N3,H)              /* rec.value */
+                     );
+          dec_term(ST);
+        }
+        break;
+       }
+     default:
+           if(arity(N)==0)
+           { N1=LOOKATOM(N,1);
+            if(clause(N1) && !name(body(clause(N1))))
+             { H=mkfreevar();
+               UNI(H,son(head(clause(N1))));
+               deref(H); return H;
+             }
+           }
+    }
+eret:
+  H1=mkfreevar();
+  if(name(H) > NORMATOM && DOREDUCE(H1,H,true))
+      {H=H1; deref(H);}
+  return H;
+}
+
+GLOBAL boolean appears(ATOM A, int N, TERM T)
+{ register TERM X;
+  register ATOM AA;
+  while(N-->0)
+  { X=T; deref(X); 
+    if((AA=name(X))==A) return true;
+    if(AA==COLON_2 && name(arg1(X))==A) return false;
+    if(AA>NORMATOM && arity(AA))
+      if(appears(A,arity(AA),son(X))) return true;
+    next_br(T);
+  }
+  return false;
+}
+
+TERM substsim(TERM T, TERM L)
+/* short list */
+{ register TERM H,H1;
+  int I;
+  register TERM HL;
+  ATOM N,NN;
+   deref(T);
+   if(!name(L)){H=T;goto ende;}
+   if((N=name(T)) < NORMATOM) return T;
+   if(arity(N)==0) 
+     {   HL=L;
+         while(name(HL))
+           {
+             if(name(HL) !=N) { next_br(HL); next_br(HL); }
+             else
+               { next_br(HL); H=mkfunc(VART,son(HL));
+                 goto ende;
+               }
+           }
+         H=  T; goto ende;
+     }
+   if(N==COLON_2)
+     { ATOM N0; TERM LL;
+       if((N=name(arg1(T))) > NORMATOM && arity(N)==0)
+       { if (N!=TILDE_0)
+	  { LL=L; NN=N;
+	    next_atom:
+	    while(N0=name(LL))
+		{ while(N==N0 || appears(N,1,son(LL))) 
+                    { N=modify(N); LL=L; goto next_atom; }
+		  next_br(LL); next_br(LL);
+		}
+          }
+	 if(N!=NN &&  N!=TILDE_0) /* renaming NN --> N */
+	    T=substsim(arg2(T),mkl1(NN,mkatom(N)));
+	 else T=arg2(T);
+	 T=mkfunc(COLON_2,mk2sons(N,nil_term,VART,substsim(T,L)));
+         return T;
+       }
+       N=COLON_2;
+     }
+   T=son(T); H=H1=stackterms(arity(N));
+   I=arity(N);
+   for(;;)
+    { ATOM A;
+	  register TERM TT;
+      TT=T; deref(TT);
+      if((A=name(TT))<NORMATOM){ name(H1)=VART;son(H1)=TT;goto cont;}
+      if(arity(A)==0) 
+         {   HL=L;
+             while(non_nil_atom(name(HL)))
+               {
+                 if(name(HL)!=A) { next_br(HL); next_br(HL); }
+                 else
+                   { next_br(HL);
+		     name(H1)=VART;
+                     son(H1)=son(HL);
+                     goto cont;
+                   }
+               }
+             name(H1)=A; son(H1)=nil_term;
+             goto cont;
+         }
+      else {name(H1)=VART; son(H1)=substsim(TT,L);}
+cont:
+      if(--I==0) break;
+      next_br(H1);next_br(T); 
+    }
+   H=mkfunc(N,H);
+ende:
+   deref(H);
+   if (!REDUCEFLAG) goto ret;
+   N=name(H); if(arity(N)) NN=name(arg1(H)); 
+   if(N==LISTIND_3 && (NN==CONS_2 || NN==NIL_0)) goto redret;
+   if(N==PIND_3 && (NN==SUCC_1 || NN==INTT)) return pind3_red(H);
+   if(N==IND_4 && NN==INTT) goto redret;
+   if(N==INT_EQ_4 && NN==INTT && name(arg2(H))==INTT) goto redret;
+   /* !!!!!! pfui !!!!!!! */
+   if(N==OF_2 && name(symbred(arg1(H)))==LAMBDA_1) return of_red(H);
+   if(N==SPREAD_2 && NN==COMMA_2) goto redret;
+   if(N==DECIDE_3 && (NN==INL_1 || NN==INR_1)) goto redret;
+   if(N==RECIND_3 && (NN==INL_1 || NN==INR_1)) goto redret;
+   if(N==EVAL_1 || N==QUOTE_1) goto redret;
+  H1=mkfreevar();
+  if(name(H) > NORMATOM && DOREDUCE(H1,H,true))
+      {H=H1; deref(H);}
+   goto ret;
+redret: 
+   H=symbred(H);
+ret:
+   return H;
+}
+
+LOCAL TERM pind3_red(register TERM H)
+{ TERM ST,HH;
+  TERM H1,H2;
+  ATOM N1,N2;
+  /* deref(H); */
+  H1=arg1(H); 
+  if(name(H1)==INTT && ival(H1)>=0)
+  if (ival(H1)==0) return arg2(H); 
+  else { }
+  if(name(H1)!=SUCC_1) 
+  { H1=symbred(H1);
+    if(name(H1)==INTT) 
+      if (ival(H1)==0) return arg2(H); 
+      else { }
+    if(name(H1)!=SUCC_1) 
+      { TERM T;  /* no further reduction */
+        T=stackterms(3);
+        name(T)=name(br(T))=name(br(br(T)))=VART;
+        son(T)=H1; son(br(T))=arg2(H);
+        son(br(br(T)))=arg3(H);
+        return mkfunc(PIND_3,T); 
+      }
+  } 
+  H2=arg3(H);
+  /* getbound(N1,H2); */
+  if (name(H2)!=COLON_2) return H;
+  N1=name(arg1(H2));
+  if (arity(N1)||N1<NORMATOM) return H;
+  H2=arg2(H2);
+
+  /* getbound(N2,H2); */
+  if (name(H2)!=COLON_2) return H;
+  N2=name(arg1(H2));
+  if (arity(N2)||N2<NORMATOM) return H;
+  H2=arg2(H2);
+
+  HH=ST=stackterms(1);
+  while(name(H1)==SUCC_1)
+   	  { H1=arg1(H1); son(ST)=H1; ST=stackterms(1); }
+  dec_term(ST);
+  if(name(H1)==INTT && ival(H1)==0)  H=arg2(H); 
+  else { TERM T;  /* no further reduction */
+          T=stackterms(3);
+          name(T)=name(br(T))=name(br(br(T)))=VART;
+          son(T)=H1; son(br(T))=arg2(H);
+          son(br(br(T)))=arg3(H);
+          H=mkfunc(PIND_3,T); 
+         }
+  while(ST >=HH)
+  { H=substsim(H2,mkl2(N1,son(ST),N2,H)); dec_term(ST); }
+  H1=mkfreevar();
+  if(name(H) > NORMATOM && DOREDUCE(H1,H,true))
+      {H=H1; deref(H);}
+  return H;
+}
+
+LOCAL TERM of_red(register TERM H)
+{ register TERM H1;
+  register ATOM N;
+  H1=arg1(H); 
+  /* check2(H1,name(H1)!=LAMBDA_1); */
+  if(name(H1)!=LAMBDA_1) 
+   { H1=symbred(H1);
+     if(name(H1)!=LAMBDA_1) goto ret;
+   }
+
+  H1=arg1(H1);
+  /* getbound(N,H1); */
+  if (name(H1)!=COLON_2) return H;
+  N=name(arg1(H1));
+  if (arity(N)||N<NORMATOM) return H;
+  H=substsim(arg2(H1),mkl1(N,symbred(arg2(H))));
+ret:
+  H1=mkfreevar();
+  if(name(H) > NORMATOM && DOREDUCE(H1,H,true)) {H=H1; deref(H);}
+  return H;
+}
+
+
+#endif
+
+

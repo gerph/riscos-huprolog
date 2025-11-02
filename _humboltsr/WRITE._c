@@ -1,0 +1,405 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     **
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+#include "systems.h"
+#include "types.h"
+#include "errors.h"
+#include "atoms.h"
+#include "files.h"
+#include "maxvars.h"
+
+/*
+WriteOut writes a term to the text file 'output', using operator
+information in atom entries to select the best syntax.  
+*/
+
+IMPORT boolean TRACING,SPYTRACE;
+IMPORT int SPYING;
+IMPORT ENV E;
+IMPORT PREC LPREC(),RPREC();
+IMPORT void ABORT(),SYSTEMERROR(); 
+IMPORT void GETCHAR(); 
+IMPORT char CH; 
+IMPORT TERM phy_name();
+IMPORT boolean FILEENDED();
+IMPORT file OpenFile();
+IMPORT boolean UserAbort,ENAB_INTR;
+
+
+#if !BIT8
+#define WRITEDEPTH 200   /* Max. nesting depth */
+#endif
+#if BIT8
+#define WRITEDEPTH 20   /* Max. nesting depth */
+#endif
+
+#define WRITELENGTH 512   /* Max. list length */
+
+FORWARD void wq();
+
+IMPORT TERM VAR_TAB[MAXVARS]; /* use vartable from read.c */
+
+LOCAL int  VARCNT;
+LOCAL boolean LISTFLAG,DISPLFLAG,QUOTE;
+
+IMPORT char CHARCLASS[]; /* from readin.c */
+
+#define SC 1
+#define BC 2
+#define DC 3
+#define OC 4
+#define C0 5
+
+LOCAL boolean last_was_numb;
+
+LOCAL void WRITETERM (TERM Y, PREC P, int DEPTH)
+{ 
+    ATOM A;
+    last_was_numb=false;
+    if(UserAbort && ENAB_INTR) return;
+    if(DEPTH <=0)  { ws("___"); return; }
+    /* if(!LISTFLAG) deref(Y); */
+    if(!LISTFLAG || name(Y)==VART) deref(Y);
+    switch (A=name(Y))
+    {
+    case INTT: wi(ival(Y)); last_was_numb=true; break;
+#if LONGARITH
+    case LONGT: ws(ltoa(longval(Y))); last_was_numb=true; break;
+#endif
+#if REALARITH
+    case REALT: ws(ftoa(realval(Y))); last_was_numb=true; break;
+#endif
+    case UNBOUNDT:
+      if(is_heapterm(Y))
+	  ws("_");
+      else
+      {
+          int D;
+          ws("_");
+          D=0;
+          while(D!=VARCNT)
+              if(Y==VAR_TAB[D++]) { wi(D); return; }
+          if(VARCNT!=MAXVARS)
+              { VAR_TAB[VARCNT++]=Y; wi(VARCNT); }
+      }
+      break;
+
+    case SKELT:
+      ws("_"); wi(offset(Y)); break;
+
+    case CURLY_1:
+      ws("{"); WRITETERM(son(Y),MAXPREC,DEPTH-1); 
+      if(UserAbort && ENAB_INTR) return;
+      ws("}"); break;
+
+    case CONS_2:
+      if(!DISPLFLAG)
+        { int  N;
+          TERM  Z,ZZ;
+          boolean asciistring=true;
+          Z=Y; N=0;
+          do { N++;
+               if(LISTFLAG) ZZ=son(Z); else ZZ=arg1(Z);
+               if(name(ZZ)!=INTT || ival(ZZ)<' ' || 127<=ival(ZZ)) 
+               asciistring=false; 
+               if(LISTFLAG) Z=br(son(Z)); else Z=arg2(Z);
+          } while(name(Z)==CONS_2 && N < WRITELENGTH); 
+          if(N >=WRITELENGTH)goto listnotation;
+          if(name(Z)!=NIL_0) 
+          { asciistring=false;
+            if(name(Z)!=UNBOUNDT && name(Z)!=SKELT) goto operator;  
+            /* operator representation  a.b.c  for 
+               not well founded lists */
+          }
+          if(asciistring && 0<N && N<60)
+          { ws("\""); 
+            Z=Y; 
+            do { if(LISTFLAG) ZZ=son(Z); else ZZ=arg1(Z);
+                 wc(ival(ZZ));
+                 if(LISTFLAG) Z=br(son(Z)); else Z=arg2(Z);
+            } while(name(Z)==CONS_2);
+            ws("\"");
+            break;
+          }
+        listnotation:
+          ws("[");
+          WRITETERM(son(Y),SUBPREC,DEPTH-1);
+          if(UserAbort && ENAB_INTR) return;
+          N=1;
+          if(LISTFLAG) Z=br(son(Y)); else Z=arg2(Y);
+          while(N++!=WRITELENGTH && name(Z)==CONS_2 )
+          { ws(", ");
+            WRITETERM(son(Z),SUBPREC,DEPTH-1);
+            if(UserAbort && ENAB_INTR) return;
+            if(LISTFLAG) Z=br(son(Z)); else Z=arg2(Z);
+          }
+          if(name(Z)!=NIL_0)
+          { if(N<WRITELENGTH) { ws(" | "); WRITETERM(Z,SUBPREC,DEPTH-1); }
+            else ws(" ...");
+          }
+          ws("]");
+          break;
+        }
+             
+
+    default:
+
+      if(arity(A)==0) 
+      {     if(A !=NIL_0 && A !=CURLY_0 && A !=CUT_0) wq(A); 
+            else ws(tempcopy(A));
+            break;
+      }
+
+  
+      if(oclass(A)==NONO || arity(A)>2 || DISPLFLAG) 
+      /*------------------------------------*/
+      { int i,aar;
+        TERM  S;
+        wq(A);
+        ws("(");  
+        aar=arity(A);
+        S=son(Y);
+        for(i=1;i<=aar;i++)
+        {  WRITETERM(S,SUBPREC,DEPTH-1);
+            if(UserAbort && ENAB_INTR) return;
+           next_br(S);
+           if(i < aar) ws(",");
+        }
+        ws(")");  
+        break;
+      }
+      
+      /* operator notation */
+      /*-------------------*/
+      operator:
+      if(P<oprec(A)) ws("(");
+      switch (oclass(A)) 
+      { case FXO: case FYO:
+          wq(A); ws(" "); WRITETERM(son(Y),RPREC(A),DEPTH-1); break;
+        case XFO: case YFO:
+          WRITETERM(son(Y),LPREC(A),DEPTH-1); if(UserAbort && ENAB_INTR) return;
+          ws(" "); wq(A); break;
+        case XFXO: case XFYO: case YFXO:
+          WRITETERM(son(Y),LPREC(A),DEPTH-1);
+            if(UserAbort && ENAB_INTR) return;
+          if(A==CONS_2 && last_was_numb) ws(" ");
+          else if(A!=COMMA_2 && A!=SEMI_2 && A!=COLON_2) ws(" ");  
+          ws(tempcopy(A));
+          if(A!=CONS_2 && A!=NL_2) ws(" ");  
+          WRITETERM(br(son(Y)),RPREC(A),DEPTH-1);
+            if(UserAbort && ENAB_INTR) return;
+          break;
+       default: SYSTEMERROR("WRITETERM.1");
+      }
+      if(P<oprec(A)) ws(")");
+      break;
+
+  }
+}
+
+GLOBAL void DISPLAY(TERM T)
+{ QUOTE=true; LISTFLAG=false; VARCNT=0; DISPLFLAG=true;
+#if !CPM
+  out_buffer(BUF_ON);
+#endif
+  WRITETERM(T,MAXPREC,WRITEDEPTH);
+#if !CPM
+  out_buffer(BUF_OFF);
+#endif
+  QUOTE=false;
+}
+
+GLOBAL void WRITEOUT(TERM X, boolean quote)
+{ QUOTE=quote; DISPLFLAG=false; LISTFLAG=false; 
+  VARCNT=0; 
+#if !CPM
+/*  out_buffer(BUF_ON); */
+#endif
+  WRITETERM(X,MAXPREC,WRITEDEPTH); 
+#if !CPM
+/*  out_buffer(BUF_OFF); */
+#endif
+  QUOTE=false;
+}
+
+GLOBAL void ABORT_WRITE(register TERM T)
+{
+    QUOTE=false; DISPLFLAG=false; LISTFLAG=false; 
+    VARCNT=0; WRITETERM(T,MAXPREC,10); 
+}
+    
+
+GLOBAL void LISTOUT (TERM X)
+{ LISTFLAG=true; DISPLFLAG=false;
+  QUOTE=true; VARCNT=0; 
+#if !CPM
+  out_buffer(BUF_ON); 
+#endif
+  WRITETERM(X,SUBPREC,WRITEDEPTH); 
+#if !CPM
+  out_buffer(BUF_OFF); 
+#endif
+  QUOTE=false;
+}
+
+
+/* Output a trace message. */
+
+GLOBAL ENV TRACE_GOON=0;
+
+GLOBAL boolean TRACE(ATOM MESS, TERM Y, ENV ENVP)
+{ boolean spyflag=false, answer=true;
+  boolean mustread=true;
+  boolean again=false;
+  TERM oldinfile,oldoutfile;
+  boolean newgo=false;
+
+  E=ENVP; BE=base(ENVP);
+  if(TRACE_GOON && E>TRACE_GOON) return true;
+  if(TRACE_GOON && E==TRACE_GOON && MESS==REDO_0) return true;
+  deref(Y);
+#if  DEBUG
+  if(DEBUGFLAG) out_1(itoa(Y));
+  else 
+#endif
+  if(name(Y)==COMMA_2 || name(Y)==SEMI_2 || 
+	  name(Y)==GOTO_1 || name(Y) <=NORMATOM ||
+	  repchar(longstring(name(Y)))=='$') 
+	  return true; 
+  TRACE_GOON=0;
+  /* Don't trace evaluable predicates unless debugging interpreter. */
+     if(!(spyflag=spy(name(Y))) && !TRACING)return true;
+
+  oldinfile=FNAME(inputfile);
+  inputfile=OpenFile(phy_name(STDTRACE_0),read_mode);
+  oldoutfile=FNAME(outputfile);
+  outputfile=OpenFile(phy_name(STDTRACE_0),write_mode);
+     ws(spyflag ? "*" : " ");
+     ws("("); wi((int)E); ws(")"); 
+     switch(MESS)
+     { case CALL_0:    ws("\tCALL: "); break;
+       case REDO_0:    ws("\tREDO: "); break;
+       case PROVED_0:  ws("\tEXIT: "); break;
+       case FAILED_0:  ws("\tFAIL: "); break;
+     }
+     QUOTE=true; DISPLFLAG=false; LISTFLAG=false; VARCNT=0; 
+     WRITETERM(Y,MAXPREC,20); 
+     QUOTE=false;
+     if( 1 /*MESS==CALL_0 || MESS==REDO_0*/)
+     {
+        mesg:
+           ws("   [sanft?\\n] "); 
+       nextch:
+  if(FILEENDED()) goto ret;
+         GETCHAR();
+  if(!mustread && (CH != '\n'))goto nextch;
+         switch(CH)
+         { 
+    case 's': case 'S':   TRACE_GOON=E; 
+                         mustread=false;
+                         goto nextch;
+    case 'a': case 'A':   TRACE_GOON=0;ABORT(ABORTE); 
+    case 'f': case 'F':  answer=false; 
+                         mustread=false;
+                         TRACE_GOON=0;
+                         goto nextch;
+    case 'n': case 'N':  TRACING=false;
+                         SPYTRACE=SPYING;
+                         TRACE_GOON=0;
+                         mustread=false;
+                         goto nextch;
+    case 't': case 'T':  TRACING=true;
+                         SPYTRACE=true;
+                         mustread=false;
+                         goto nextch;
+    case '0': case '1': case '2': case '3': case '4':
+    case '5': case '6': case '7': case '8': case '9':
+                         if(!newgo)TRACE_GOON=CH-'0';
+                         else
+                           TRACE_GOON=10*TRACE_GOON + CH-'0';
+                         if(TRACE_GOON >E)
+                          { TRACE_GOON=0; mustread=false;}
+                         break;
+    case '?':
+                         ws(" [s]kip\n");
+                         ws(" [a]bort\n");
+                         ws(" [n]otrace\n");
+                         ws(" [f]ail\n");
+                         ws(" [t]race\n");
+                         ws(" [\\n]  next");
+                         mustread=false;again=true;
+                         goto mesg;
+    case '\n':           if(!again) goto ret;            
+                         again=false;
+                         mustread=true;/* no break */
+    default:             goto nextch;
+         }
+     }
+     else ws("\n");
+    ret:
+    inputfile=OpenFile(oldinfile,read_mode);
+    outputfile=OpenFile(oldoutfile,write_mode);
+    return answer;
+}
+
+GLOBAL void wq(ATOM A)
+{/* quoted output if necessary */
+    int nIDENT=0,aIDENT=0;
+    int notfirst=0;
+    string s,ss;
+    ss=s=tempcopy(A);
+    if(QUOTE==false) goto noquote; 
+    do {
+        switch(CHARCLASS[*s])
+        {
+            case BC:
+            case DC: if(!notfirst)goto quote;
+            case SC: ++nIDENT; break;
+            case OC: ++aIDENT;break;
+            default: goto quote;
+        }
+        s++;notfirst++;
+    }while(*s);
+  if(nIDENT &&  aIDENT) goto quote;
+ noquote:
+     ws(ss);
+     return;
+ quote: ws("\'");
+        while(*ss)
+        {
+            if(*ss== '\t') ws("\\t");
+            else if(*ss== '\n') ws("\\n");
+            else if(*ss== '\007') ws("\\a");
+            else if(*ss== '\r') ws("\\r");
+            else if(*ss== '\b') ws("\\b");
+            else if(*ss== '\f') ws("\\f");
+            else if(*ss== '\v') ws("\\v");
+            else if(*ss== '\\') ws("\\\\");
+            else if(*ss== '\'') ws("\'\'");
+            else if(*ss < ' ' || *ss > '~') 
+                { ws("\\");
+                  wc((int)(((unsigned int)(*ss & 0300)) >> 6) + '0');
+                  wc((int)(((unsigned int)(*ss & 0070)) >> 3) + '0');
+                  wc((int)((unsigned int)(*ss & 0007)) + '0');
+                }
+            else wc(*ss);
+            ss++;
+        }
+        ws("\'");
+        return;
+}
+
+

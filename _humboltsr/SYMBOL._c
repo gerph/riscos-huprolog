@@ -1,0 +1,420 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     ** 
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1988      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+
+#include "systems.h"
+#include "types.h"
+#include "errors.h"
+#include "atoms.h"
+
+#if SYMBOLARITH
+
+IMPORT boolean REDUCEFLAG;
+IMPORT void ABORT();
+IMPORT boolean DOREDUCE();
+IMPORT ATOM modify();
+IMPORT ATOM LOOKATOM();
+IMPORT void WRITEOUT();
+extern TERM substsim();
+
+#if DEBUG
+#define test(p,t)  if(DEBUGFLAG) \
+               {ws("[");wi(E);ws("]");ws(p); \
+                WRITEOUT(t,false);ws("\n");}
+#endif
+#if ! DEBUG
+#define test(p,t)
+#endif
+
+LOCAL TERM MAC_HLP;
+#define symbred(X)   psymbred(X)
+/*
+#define symbred(X)   (name(MAC_HLP=X) < NORMATOM ? MAC_HLP : \
+                        psymbred(X))
+
+*/
+LOCAL TERM mkl1(ATOM AT1, TERM S1)
+{   TERM H,H1;
+    H1=H=stackterms(2);
+                 name(H1)=AT1;son(H1)=S1;
+    next_br(H1); name(H1)=nil_atom;son(H1)=nil_term; 
+    return H;
+}
+
+LOCAL TERM mkl2(ATOM AT1, TERM S1, ATOM AT2, TERM S2)
+{   register TERM H,H1;
+    H1=H=stackterms(3);
+                 name(H1)=AT1; son(H1)=S1;
+    next_br(H1); name(H1)=AT2; son(H1)=S2;
+    next_br(H1); name(H1)=nil_atom; son(H1)=nil_term;
+    return H;
+}
+
+LOCAL TERM mkl3(ATOM AT1, TERM S1, ATOM AT2, TERM S2, ATOM AT3, 
+                TERM S3)
+{   register TERM H,H1;
+	H1=H=stackterms(4);
+	             name(H1)=AT1; son(H1)=S1;
+	next_br(H1); name(H1)=AT2; son(H1)=S2;
+	next_br(H1); name(H1)=AT3; son(H1)=S3;
+	next_br(H1); name(H1)=nil_atom; son(H1)=nil_term;
+	return H;
+}
+
+LOCAL boolean gbproc(ATOM *A, TERM *T)
+{ if(name(*T)!=COLON_2)return 1;
+  *A=name(arg1(*T));
+  if(arity(*A)||(*A)<NORMATOM)return 1;
+  *T=arg2(*T);
+  return 0;
+}
+
+#define getbound(NNN,HHH)	if(gbproc(&NNN,&HHH))goto fret;else
+#define check2(HHH,CCC)	if(CCC){HHH=symbred(HHH);if(CCC)goto eret;}else
+
+TERM psymbred(TERM H)
+  { TERM H1,H2;
+    ATOM N,N1,N2;
+    deref(H);
+    N=name(H);
+    switch(N)
+    {
+      case INTT:
+      case UNBOUNDT:
+           goto fret;
+      case RECIND_3:
+           H1=arg1(H);
+	   check2(H1,name(H1)!=INL_1 && name(H1)!=INR_1);
+           if(name(H1)==INL_1)
+           { H2=arg2(H);
+	     getbound(N1,H2);
+             H=symbred(substsim(H2,mkl1(N1,arg1(H1))));
+             goto fret;
+           }
+           if(name(H1)==INR_1)
+           { TERM T;
+             H2=arg3(H);
+	     getbound(N1,H2);
+	     getbound(N2,H2);
+             T=stackterms(3);
+             name(T)=N1; son(T)=nil_term; 
+             name(br(T))=COLON_2; son(br(T))=son(arg2(H));
+             name(br(br(T)))=COLON_2; son(br(br(T)))=son(arg3(H));
+             H=substsim(H2, mkl2(N1,mkfunc(LAMBDA_1,
+               mkfunc(COLON_2,mk2sons(N1,nil_term,RECIND_3,T))),
+                                  N2,arg1(H1)));
+             goto fret;
+           }
+      case QUOTE_1:
+           H=arg1(H); goto fret;
+      case EVAL_1:
+           H=symbred(psymbred(arg1(H))); goto fret;
+      case OF_2: 
+           H1=arg1(H); 
+	   check2(H1,name(H1)!=LAMBDA_1);
+	   H1=arg1(H1);
+	   getbound(N1,H1);
+	   H=substsim(H1,mkl1(N1,symbred(arg2(H))));
+	   goto eret;
+      case SPREAD_2:
+             H1=arg1(H);
+	     check2(H1,name(H1)!=COMMA_2);
+             H2=arg2(H);
+	     getbound(N1,H2);
+	     getbound(N2,H2);
+             H=substsim(H2,mkl2(N1,arg1(H1),N2,arg2(H1)));
+             goto eret;
+     case DECIDE_3:
+           H1=arg1(H);
+	   check2(H1,name(H1)!=INL_1 && name(H1)!=INR_1);
+           if(name(H1)==INL_1)H2=arg2(H);
+           else H2=arg3(H);
+	   getbound(N1,H2);
+           H=substsim(H2,mkl1(N1,arg1(H1)));
+           goto eret;
+    case COMMA_2:
+    case CONS_2:
+           H=mkfunc(N,mk2sons(VART,symbred(arg1(H)),VART,symbred(arg2(H))));
+           goto fret;
+    case LAMBDA_1:
+    case NIL_0: goto fret;
+    case SUCC_1:
+	   H=symbred(arg1(H));
+	   if (name(H)==PRED_1) H=arg1(H); 
+	   /* else if (name(H)==INTT) H=mkint(ival(H)+1); */
+           else H=mkfunc(SUCC_1,mkfunc(VART,H));
+	   goto fret;
+    case PRED_1:
+	   H=symbred(arg1(H));
+	   if (name(H)==SUCC_1) H=arg1(H); 
+	   /* else if (name(H)==INTT) H=mkint(ival(H)-1); */
+           else H=mkfunc(PRED_1,mkfunc(VART,H));
+	   goto fret;
+    case INL_1:
+    case INR_1:
+           H=mkfunc(N,mkfunc(VART,symbred(arg1(H))));
+           goto fret;
+    case INT_EQ_4:
+      { TERM L,R,T;
+	L=symbred(arg1(H)); R=symbred(arg2(H));
+	if (name(L)==INTT && name(R)==INTT)
+	{ if (ival(L)==ival(R)) H=symbred(arg3(H)); 
+	  else H=symbred(arg4(H));
+	  goto eret;
+	}
+	T=H1=stackterms(4);
+	name(H1)=VART; val(H1)=L; next_br(H1);
+	name(H1)=VART; val(H1)=R; next_br(H1);
+	name(H1)=VART; val(H1)=arg3(H); next_br(H1);
+	name(H1)=VART; val(H1)=arg4(H); 
+        H=mkfunc(N,T);
+	goto fret;
+      }
+    case IND_4:
+      { ATOM LAST,I;
+        TERM desc;
+        int n, ii, sign;
+           H1=arg1(H);
+	   check2(H1,name(H1)!=INTT);
+           ii=ival(H1);
+           if(ii==0) { H=symbred(arg3(H)); goto fret; }
+           if(ii<0){ desc=arg2(H); sign= -1; }
+           else { desc=arg4(H); sign=1; }
+	   getbound(I,desc);
+	   getbound(LAST,desc);
+           H=arg3(H);
+           H2=mkint(98);
+           for(n=1;n<=ii;n +=sign)
+            {
+             ival(H2)=n;
+             H=substsim(desc,mkl2(LAST,H,I,H2));
+             if(name(H) > NORMATOM && DOREDUCE(H1=mkfreevar(),H,true))
+                    {H=H1;deref(H);}
+            }
+           goto fret;
+           break;
+      }
+
+     case PIND_3:
+      { TERM ST,HH;
+	H1=arg1(H); 
+        if(name(H1)==INTT)
+	  if (ival(H1)==0) { H=arg2(H); goto fret; }
+	  else if (ival(H1)<0) goto fret;
+	  else { }
+        if(name(H1)!=SUCC_1) 
+        {
+          H1=symbred(H1);
+	  if(name(H1)==INTT) 
+	    if (ival(H1)==0) { H=arg2(H); goto fret;}
+	    else if (ival(H1)<0) goto fret;
+	    else { }
+          if(name(H1)!=SUCC_1)goto fret;
+        } 
+        H2=arg3(H);
+	getbound(N1,H2);
+	getbound(N2,H2);
+        HH=ST=stackterms(1);
+        while(name(H1)==SUCC_1)
+		  { H1=arg1(H1); son(ST)=H1; ST=stackterms(1); }
+        dec_term(ST);
+	if(name(H1)==INTT && ival(H1)==0)  H=arg2(H); 
+        else
+         { TERM T;/*  fehler!!!!! */
+          T=stackterms(3);
+          name(T)=name(br(T))=name(br(br(T)))=VART;
+          son(T)=H1; son(br(T))=arg2(H);
+          son(br(br(T)))=arg3(H);
+          H=mkfunc(PIND_3,T); 
+         }
+        while(ST >=HH)
+        {
+          H=substsim(H2,mkl2(N1,son(ST),  /* predecessor */
+                              N2,H)              /* rec.value */
+                     );
+          dec_term(ST);
+        }
+        goto eret;
+       }
+     case LISTIND_3:
+      {ATOM N3;
+       TERM ST,HH;
+        H1=arg1(H);
+        if(name(H1)==NIL_0) 
+           { H=arg2(H); goto fret;}
+        if(name(H1)!=CONS_2)
+        {
+          H1=symbred(H1);
+	  if(name(H1)==NIL_0){H=arg2(H);goto fret;}
+          if(name(H1)!=CONS_2)goto fret;
+        }
+        H2=arg3(H);
+	getbound(N1,H2);
+	getbound(N2,H2);
+	getbound(N3,H2);
+        HH=ST=stackterms(1);
+        while(name(H1)==CONS_2)
+        {
+          son(ST)=H1;
+          H1=arg2(H1); ST=stackterms(1);
+        }
+        dec_term(ST);
+        if(name(H1)==NIL_0)H=arg2(H);
+        else
+         { TERM T;/*  fehler!!!!! */
+          T=stackterms(3);
+          name(T)=name(br(T))=name(br(br(T)))=VART;
+          son(T)=H1; son(br(T))=arg2(H);
+          son(br(br(T)))=arg3(H);
+          H=mkfunc(LISTIND_3,T);
+         }
+        while(ST >=HH)
+        {
+          H=substsim(H2,mkl3(N1,arg1(son(ST)),  /* list head */
+                              N2,arg2(son(ST)),  /* list rest */
+                              N3,H)              /* rec.value */
+                     );
+          dec_term(ST);
+        }
+        goto eret;
+       }
+     default:
+           if(arity(N)==0)
+           { N1=LOOKATOM(N,1);
+            if(clause(N1) && !name(body(clause(N1))))
+             { H=mkfreevar();
+               UNI(H,son(head(clause(N1))));
+               deref(H); goto fret;
+             }
+           }
+    }
+eret:
+  H1=mkfreevar();
+  if(name(H) > NORMATOM && DOREDUCE(H1,H,true))
+      {H=H1; deref(H);}
+fret:
+  return H;
+}
+
+GLOBAL boolean appears(ATOM A, int N, TERM T)
+{ register TERM X;
+  register ATOM AA;
+  while(N-->0)
+  { X=T; deref(X); 
+    if((AA=name(X))==A) return true;
+    if(AA==COLON_2 && name(arg1(X))==A) return false;
+    if(AA>NORMATOM && arity(AA))
+      if(appears(A,arity(AA),son(X))) return true;
+    next_br(T);
+  }
+  return false;
+}
+
+TERM substsim(TERM T, TERM L)
+/* short list */
+{ register TERM H,H1;
+  int I;
+  register TERM HL;
+  ATOM N,NN;
+   deref(T);
+   if(!name(L)){H=T;goto ende;}
+   if((N=name(T)) < NORMATOM) return T;
+   if(arity(N)==0) 
+     {   HL=L;
+         while(name(HL))
+           {
+             if(name(HL) !=N) next_br(HL);
+             else
+               { H=mkfunc(VART,son(HL));
+                 goto ende;
+               }
+           }
+         H=  T; goto ende;
+     }
+   if(N==COLON_2)
+     { ATOM N0; TERM LL;
+       if((N=name(arg1(T))) > NORMATOM && arity(N)==0)
+       { if (N!=TILDE_0)
+	  { LL=L; NN=N;
+	    next_atom:
+	    while(N0=name(LL))
+		{ while(N==N0 || appears(N,1,son(LL))) 
+                    { N=modify(N); LL=L; goto next_atom; }
+		  next_br(LL);
+		}
+          }
+	 if(N!=NN &&  N!=TILDE_0) /* renaming NN --> N */
+	    T=substsim(arg2(T),mkl1(NN,mkatom(N)));
+	 else T=arg2(T);
+	 T=mkfunc(COLON_2,mk2sons(N,nil_term,VART,substsim(T,L)));
+         return T;
+       }
+       N=COLON_2;
+     }
+   T=son(T); H=H1=stackterms(arity(N));
+   I=arity(N);
+   for(;;)
+    { ATOM A;
+	  register TERM TT;
+      TT=T; deref(TT);
+      if((A=name(TT))<NORMATOM){ name(H1)=VART;son(H1)=TT;goto cont;}
+      if(arity(A)==0) 
+         {   HL=L;
+             while(non_nil_atom(name(HL)))
+               {
+                 if(name(HL)!=A) HL=br(HL);
+                 else
+                   { name(H1)=VART;
+                     son(H1)=son(HL);
+                     goto cont;
+                   }
+               }
+             name(H1)=A; son(H1)=nil_term;
+             goto cont;
+         }
+      else {name(H1)=VART; son(H1)=substsim(TT,L);}
+cont:
+      if(--I==0) break;
+      next_br(H1);next_br(T); 
+    }
+   H=mkfunc(N,H);
+ende:
+   deref(H);
+   if (!REDUCEFLAG) goto ret;
+   N=name(H); if(arity(N)) NN=name(arg1(H)); 
+   if(N==LISTIND_3 && (NN==CONS_2 || NN==NIL_0)) goto redret;
+   if(N==PIND_3 && (NN==SUCC_1 || NN==INTT)) goto redret;
+   if(N==IND_4 && NN==INTT) goto redret;
+   if(N==INT_EQ_4 && NN==INTT && name(arg2(H))==INTT) goto redret;
+   /* !!!!!! pfui !!!!!!! */
+   if(N==OF_2 && name(symbred(arg1(H)))==LAMBDA_1) goto redret;
+   if(N==SPREAD_2 && NN==COMMA_2) goto redret;
+   if(N==DECIDE_3 && (NN==INL_1 || NN==INR_1)) goto redret;
+   if(N==RECIND_3 && (NN==INL_1 || NN==INR_1)) goto redret;
+   if(N==EVAL_1 || N==QUOTE_1) goto redret;
+  H1=mkfreevar();
+  if(name(H) > NORMATOM && DOREDUCE(H1,H,true))
+      {H=H1; deref(H);}
+   goto ret;
+redret: 
+   H=symbred(H);
+ret:
+   return H;
+}
+
+#endif
+
+

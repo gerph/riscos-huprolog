@@ -1,0 +1,27 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     **
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+#if BIT32
+#define MAXVARS 2000
+#endif
+#if BIT16 
+#define MAXVARS 200
+#endif
+#if BIT8
+#define MAXVARS 60
+#endif
+
+

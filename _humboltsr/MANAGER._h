@@ -1,0 +1,110 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     **
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+#ifndef MEMORYSIZE
+#define MEMORYSIZE   300 /* KByte */      
+#endif
+
+#if MEMORYSIZE==64 /* KByte */
+#define DEF_ATOMS       500  /* MAX. no. of atoms */
+#define DEF_TERMS      4000  /*  "    "   " term */
+#define DEF_TRAILER    1200  /*  "    "   " critical variables */ 
+#define DEF_ENVS        400  /*  "    "   " active goals */
+#define DEF_STRINGS    3500  /*  "    "   " chars in string tab */
+#endif
+
+#if MEMORYSIZE==120 /* KByte */
+#define DEF_ATOMS      1000  /* MAX. no. of atoms */
+#define DEF_TERMS     18000  /*  "    "   " term */
+#define DEF_TRAILER    2000  /*  "    "   " critical variables */ 
+#define DEF_ENVS       1000  /*  "    "   " active goals */
+#define DEF_STRINGS    8400  /*  "    "   " chars in string tab */
+#endif
+
+#if MEMORYSIZE==300 /* KByte */
+#define DEF_ATOMS      2000  /* MAX. no. of atoms */
+#define DEF_TERMS     32700  /*  "    "   " term */
+#define DEF_TRAILER    4000  /*  "    "   " critical variables */ 
+#define DEF_ENVS       1000  /*  "    "   " active goals */
+#define DEF_STRINGS   25000  /*  "    "   " chars in string tab */
+#endif
+
+#if MEMORYSIZE==650 /* KByte */
+#define DEF_ATOMS      2000  /* MAX. no. of atoms */
+#define DEF_TERMS     40000  /*  "    "   " term */
+#define DEF_TRAILER    4000  /*  "    "   " critical variables */ 
+#define DEF_ENVS       2000  /*  "    "   " active goals */
+#define DEF_STRINGS   15000  /*  "    "   " chars in string tab */
+#endif
+
+#if MEMORYSIZE==2000 /* KByte */
+#define DEF_ATOMS      3000  /* MAX. no. of atoms */
+#define DEF_TERMS     200000  /*  "    "   " term */
+#define DEF_TRAILER   13000  /*  "    "   " critical variables */ 
+#define DEF_ENVS       3000  /*  "    "   " active goals */
+#define DEF_STRINGS   35000  /*  "    "   " chars in string tab */
+#endif
+
+#if MEMORYSIZE==2800 /* KByte */
+#define DEF_ATOMS      3000  /* MAX. no. of atoms */
+#define DEF_TERMS     305000  /*  "    "   " term */
+#define DEF_TRAILER   13000  /*  "    "   " critical variables */ 
+#define DEF_ENVS       3000  /*  "    "   " active goals */
+#define DEF_STRINGS   35000  /*  "    "   " chars in string tab */
+#endif
+
+#if MEMORYSIZE==1200 /* KByte */
+#define DEF_ATOMS      2500  /* MAX. no. of atoms */
+#define DEF_TERMS     105000  /*  "    "   " term */
+#define DEF_TRAILER    7000  /*  "    "   " critical variables */ 
+#define DEF_ENVS       2000  /*  "    "   " active goals */
+#define DEF_STRINGS   25000  /*  "    "   " chars in string tab */
+#endif
+
+#if MEMORYSIZE==10000 /* KByte */
+#define DEF_ATOMS     10000  /* MAX. no. of atoms */
+#define DEF_TERMS   1000000  /*  "    "   " term */
+#define DEF_TRAILER  100000  /*  "    "   " critical variables */ 
+#define DEF_ENVS     100000  /*  "    "   " active goals */
+#define DEF_STRINGS   65000  /*  "    "   " chars in string tab */
+#endif
+
+#if MEMORYSIZE==20000 /* KByte */
+#define DEF_ATOMS     10000  /* MAX. no. of atoms */
+#define DEF_TERMS   2000000  /*  "    "   " term */
+#define DEF_TRAILER  200000  /*  "    "   " critical variables */ 
+#define DEF_ENVS     100000  /*  "    "   " active goals */
+#define DEF_STRINGS   65000  /*  "    "   " chars in string tab */
+#endif
+
+#ifdef DYNMEM
+extern int MAX_ATOMS, MAX_TERMS, MAX_TRAILER, 
+           MAX_ENVS, MAX_STRINGS;
+#else
+ 
+#define MAX_ATOMS DEF_ATOMS
+#define MAX_TERMS DEF_TERMS
+#define MAX_TRAILER DEF_TRAILER
+#define MAX_ENVS DEF_ENVS
+#define MAX_STRINGS DEF_STRINGS
+#endif
+
+#define  MAXATOMS        atom_units(MAX_ATOMS-1)
+#define  MAXTERMS        term_units(MAX_TERMS-1)
+#define  MAXTRAILER      trail_units(MAX_TRAILER-1)
+#define  MAXENVS         env_units(MAX_ENVS-1)
+#define  MAXSTRINGS      (MAX_STRINGS-1)
+

@@ -1,0 +1,863 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     **
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+#include "systems.h"
+#include "types.h"
+#include "errors.h"
+#include "atoms.h"
+#include "maxvars.h"
+#include "files.h"
+
+/* 
+
+The clauses which constitute the Prolog program are stored in skeletal
+form, with each variable replaced either by an anonymous variable or by
+a skeletal reference containing an offset from the base of a frame on
+the local stack.  The body of a clause is represented by a collection
+of terms chained immediately together.
+
+*/
+
+IMPORT void ARGERROR(),ERROR(),ABORT(),SYSTEMERROR();      /* from linebufffer.c */
+IMPORT ATOM copyatom(),GetAtom(),LOOKATOM();
+IMPORT TERM A0,A1,A2;            /* from evalpreds.c */
+IMPORT int BCT;         /* from execute.c */
+IMPORT ENV CHOICEPOINT;
+IMPORT ENV NEWENV();            /* from unify.c */
+IMPORT ENV BASEENV,ENVTOP;
+IMPORT void KILLSTACKS();
+IMPORT void freeterms();
+IMPORT TERM A0,A1,A2;           /* from evalpreds.c     */
+IMPORT void FileError();        /* from files.c         */
+IMPORT void CloseFile();        /* from files.c         */
+IMPORT boolean FERRORFLAG;      /* from files.c         */
+IMPORT boolean ECHOFLAG,HALTFLAG,WARNFLAG;       /* fom prolog.c */
+IMPORT boolean VERBOSE;
+IMPORT boolean aSYSMODE;
+IMPORT ENV E;
+IMPORT TERM READIN();           /* from readin.c        */
+IMPORT void ATOMCHAR(),STARTATOM();
+IMPORT boolean FileExist();
+IMPORT string NEWATOM;
+IMPORT void CHECKATOM();
+IMPORT TERM phy_name();
+IMPORT ATOM atom();
+IMPORT boolean isatom(),EXECUTE(),INTRES();
+IMPORT int INTVALUE();
+IMPORT void TESTATOM();
+IMPORT void DISPLAY();
+IMPORT file OpenFile();
+IMPORT ATOM LOOKUP();
+IMPORT boolean UNIFY();
+IMPORT void reclaim_heap();
+IMPORT PHASE MODE;
+
+/*
+EXPORT  boolean DOCONSULT(boolean);
+EXPORT boolean DOENSURE();
+EXPORT void abolish(),DOABOLISH(),retractclauses();
+EXPORT boolean DOCLAUSE(),DORETRACT();
+EXPORT void destroycl(CL);
+EXPORT void InitDatabase();
+EXPORT CLAUSE ADDCLAUSE();
+EXPORT TERM SKELETON();
+EXPORT CLAUSE ANDG,OR1G,OR2G,IMPG;
+*/
+
+/*
+   Produce a skeleton for p and add it to the database.  The new clause
+   is added at the front of the clause chain if asserta is true,
+   otherwise at the end.
+*/
+
+GLOBAL CLAUSE ANDG,OR1G,OR2G,IMPG;
+
+/*
+Produce a skeleton for a variable v. When the first occurrence of
+v is encountered, it is tentatively translated as an anonymous
+variable, and a pointer to this variable is stored in the
+'varmap' entry. If a second occurrence is encountered, the
+anonymous variable is changed to a skeletal reference.
+*/
+
+GLOBAL int  VARCT,VARTOP;
+
+IMPORT  TERM VAR_TAB[MAXVARS]; /* from read.c */
+LOCAL   TERM VAR_REF[MAXVARS];
+
+GLOBAL TERM SKELETON (REGISTER ATOM A, register TERM Y)
+{ register TERM X, Z;
+  REGISTER TERM S;
+  register int J,N;
+  N=arity(A);
+  if(N==0) return nil_term;
+  Z=S=heapterms(N);
+  X=Y;
+  for(;;)
+  { Y=X; deref(Y);
+    if((A=name(Y))==UNBOUNDT) 
+    {
+        for(J=0;J<VARCT;++J) if(VAR_TAB[J]==Y) goto skel_var;
+        for(J=MAXVARS-VARTOP;J<MAXVARS; ++J)
+            if(VAR_TAB[J]==Y)
+            {
+                name(VAR_REF[J])=SKELT;
+                offset(VAR_REF[J])=term_units(VARCT);
+                VAR_TAB[J]=nil_term;
+                J=VARCT++;if(VARCT+VARTOP >=MAXVARS) ABORT(NVARSE);
+                VAR_TAB[J] =Y;
+            skel_var:
+                name(Z)=SKELT; offset(Z)=term_units(J);
+                goto skel_exit;
+            }
+        /* enter new variable */
+        J=MAXVARS - ++VARTOP;if(VARCT+VARTOP>=MAXVARS) ABORT(NVARSE);
+        VAR_TAB[J]=Y;VAR_REF[J]=Z;
+        name(Z)=UNBOUNDT; val(Z)=nil_term;
+    skel_exit:
+        if (--N==0) break;
+        next_br(X); next_br(Z); continue;
+    }
+    else if(A==INTT) 
+         { name(Z)=INTT; ival(Z)=ival(Y); 
+           if (--N==0) break;
+           next_br(X); next_br(Z); continue;
+         }
+    else { if (--N==0)
+           { name(Z)=copyatom(A); 
+             if((N=arity(A))>0) 
+             { Z=son(Z)=heapterms(N);
+               X=son(Y);
+               continue;
+             }
+             son(Z)=nil_term; break;
+           }
+           name(Z)=copyatom(A); 
+           son(Z)=SKELETON(name(Z),son(Y));
+           next_br(X); next_br(Z); continue;
+         }
+  }
+  return S;
+}
+
+GLOBAL CLAUSE ADDCLAUSE (register TERM Q)
+{ ATOM A; 
+  register TERM Z,ZZ;
+  REGISTER TERM HEAD,X;
+  register CLAUSE CL;
+
+    /* deref(Q); */
+    A=name(Q);
+    VARTOP=VARCT=0;
+    if(A!=ARROW_2) 
+    { 
+        if((system(A) && !aSYSMODE) || class(A)!=NORMP) ARGERROR();
+        A=copyatom(A);
+        HEAD=SKELETON(A,son(Q));
+        CL=heapterms(4); 
+        name(body(CL))=nil_atom; son(body(CL))=nil_term;
+    }
+    else /* name(A)==ARROW_2 */
+    { int I;
+      HEAD=arg1(Q); A=copyatom(name(HEAD));
+      if((system(A) && !aSYSMODE) || class(A)!=NORMP) ARGERROR();
+      HEAD=SKELETON(A,son(HEAD)); 
+      Z=arg2(Q); 
+      I=5;/* number of terms in a simple clause */
+      /* copy clause body onto heap */ 
+      while(name(Z)==COMMA_2) { Z=arg2(Z); I++; }
+      if(I>=MAXARITY) ABORT(DEPTHE);
+      CL=heapterms(I);
+      ZZ=body(CL); Z=arg2(Q);
+     skel_1:
+        if(name(Z)==COMMA_2) X=arg1(Z); else X=Z;
+        if(name(X)==UNBOUNDT) 
+    {
+        register int J;
+        for(J=0;J<VARCT;++J) if(VAR_TAB[J]==X) goto skel_var;
+        for(J=MAXVARS-VARTOP;J < MAXVARS; ++J)
+            if(VAR_TAB[J]==X)
+            {
+                name(VAR_REF[J])=SKELT;
+                offset(VAR_REF[J])=term_units(VARCT);
+                VAR_TAB[J]=nil_term;
+                J=VARCT++;if(VARCT+VARTOP >=MAXVARS) ABORT(NVARSE);
+                VAR_TAB[J] =X;
+            skel_var:
+                name(ZZ)=SKELT; offset(ZZ)=term_units(J);
+                goto skel_exit;
+            }
+        /* enter new variable */
+        J=MAXVARS - ++VARTOP;if(VARCT+VARTOP >=MAXVARS) ABORT(NVARSE);
+        VAR_TAB[J]=X;VAR_REF[J]=ZZ;
+        name(ZZ)=UNBOUNDT; val(ZZ)=nil_term;
+    skel_exit:;
+    }
+        else
+        {
+            name(ZZ)=copyatom(name(X));
+            son(ZZ)=SKELETON(name(ZZ),son(X));
+        }
+        next_br(ZZ);
+        if(name(Z)==COMMA_2)
+        {
+            Z=arg2(Z); goto skel_1;
+        }
+        name(ZZ)=nil_atom; son(ZZ)=nil_term;
+    }
+    /* A=copyatom(A);  siehe oben */
+    if(aSYSMODE) setsystem(A);
+    name(CL)=CLAUSET;name(br(CL))=INTT;
+    nextcl(CL)=nil_term; setnvars(CL,VARCT); 
+    name(head(CL))=A; son(head(CL))=HEAD;
+    return CL;
+}
+
+/****************** I N I T I A L I S A T I O N ***********/
+
+
+LOCAL TERM CURRTERM;
+LOCAL int CURRMAX;
+
+LOCAL CLAUSE initclause(register int N, register int VARS)
+{ register CLAUSE CL;
+  CL=heapterms(N+2); name(CL)=CLAUSET; nextcl(CL)=nil_term;
+  name(br(CL))=INTT; setnvars(CL,VARS);
+  CURRTERM=br(br(CL)); CURRMAX=N; 
+  return CL;
+}
+
+LOCAL void setarg(register ATOM A, register TERM S)
+{ if(CURRMAX-- <=0) SYSTEMERROR("InitDatabase.1");
+  name(CURRTERM)=A; son(CURRTERM)=S; inc_term(CURRTERM);
+}
+
+LOCAL void skelarg(register int N)
+{ if(CURRMAX-- <=0) SYSTEMERROR("InitDatabase.2");
+  name(CURRTERM)=SKELT; offset(CURRTERM)=term_units(N); 
+  inc_term(CURRTERM);
+}
+
+LOCAL void closeclause(void)
+{ if(CURRMAX-- <=0) SYSTEMERROR("InitDatabase.3");
+  name(CURRTERM)=nil_atom; son(CURRTERM)=nil_term;
+}
+
+LOCAL TERM vars(register int M, register int N)
+{ register TERM T;
+  T=heapterms(2); name(T)=SKELT; offset(T)=term_units(M);
+  name(br(T))=SKELT; offset(br(T))=term_units(N);
+  return T;
+}
+
+LOCAL TERM v(register int N)
+{ register TERM T;
+  T=heapterms(1); name(T)=SKELT; offset(T)=term_units(N);
+  return T;
+}
+
+LOCAL void arithclause(register ATOM A)
+{ register TERM P;
+    clause(A)=initclause(6,4);
+    setarg(A,vars(0,1));
+    setarg(EVALUATE_2,vars(2,0));
+    setarg(EVALUATE_2,vars(3,1));
+    setarg(CUT_0,nil_term);
+    P=heapterms(1); name(P)=A; son(P)=vars(2,3);
+    setarg(ACOMP_1,P);
+    closeclause();
+}
+
+GLOBAL void InitDatabase(void)
+{ register TERM P; 
+  register CLAUSE C;
+
+  /* 
+     (P,Q):-P,Q. 
+  */
+  clause(COMMA_2)=ANDG=initclause(4,2);
+    setarg(COMMA_2,vars(0,1));
+    skelarg((0));
+    skelarg((1));
+    closeclause();
+
+  /* 
+     (P;_):-P. 
+     (_;Q):-Q. 
+  */
+  clause(SEMI_2)=OR1G=initclause(3,2);
+    setarg(SEMI_2,vars(0,1));
+    skelarg((0));
+    closeclause();
+  nextcl(OR1G)=OR2G=initclause(3,2);
+    setarg(SEMI_2,vars(0,1));
+    skelarg((1));
+    closeclause();
+
+  /*
+     (P->Q):-P,!,Q.
+  */
+  clause(IMPL_2)=IMPG=initclause(5,2);
+    setarg(IMPL_2,vars(0,1));
+    skelarg((0));
+    setarg(CUT_0,nil_term);
+    skelarg((1));
+    closeclause();
+
+  /*
+     repeat.
+     repeat:-repeat.
+  */
+  C=clause(REPEAT_0)=initclause(2,0);
+    setarg(REPEAT_0,nil_term);
+    closeclause();
+  nextcl(C)=C;
+
+  /*
+     true.
+  */
+  clause(TRUE_0)=initclause(2,0);
+    setarg(TRUE_0,nil_term);
+    closeclause();
+
+  /*
+     not X:-X,!,fail.
+     not _.
+  */
+  clause(NOT_1)=C=initclause(5,1);
+    setarg(NOT_1,v(0));
+    skelarg((0));
+    setarg(CUT_0,nil_term);
+    setarg(FAIL_0,nil_term);
+    closeclause();
+  nextcl(C)=initclause(2,1);
+    setarg(NOT_1,v(0));
+    closeclause();
+
+  /*
+     \+ X:-X,!,fail.
+     \+ _.
+  */
+  clause(NOT1_1)=C=initclause(5,1);
+    setarg(NOT1_1,v(0));
+    skelarg((0));
+    setarg(CUT_0,nil_term);
+    setarg(FAIL_0,nil_term);
+    closeclause();
+  nextcl(C)=initclause(2,1);
+    setarg(NOT1_1,v(0));
+    closeclause();
+
+  /*
+     X=X.
+  */
+  clause(ISEQ_2)=initclause(2,1);
+    setarg(ISEQ_2,vars(0,0));
+    closeclause();
+
+  /* 
+     X\=X:-!,fail.
+     _\=_.
+  */
+  clause(ISNEQ_2)=C=initclause(4,1);
+    setarg(ISNEQ_2,vars(0,0));
+    setarg(CUT_0,nil_term);
+    setarg(FAIL_0,nil_term);
+    closeclause();
+  nextcl(C)=initclause(2,2);
+    setarg(ISNEQ_2,vars(0,1));
+    closeclause();
+
+  /*
+     [X,Y|T]:-consult(X),[Y|T].
+     [X] :- consult(X).
+  */
+  P=heapterms(2);
+  name(P)=SKELT; offset(P)=term_units(0);
+  name(br(P))=CONS_2; son(br(P))=vars(1,2);
+  clause(CONS_2)=C=initclause(4,3);
+    setarg(CONS_2,P);
+    setarg(CONSULT_1,v(0));
+    setarg(CONS_2,vars(1,2));
+    closeclause();
+  P=heapterms(2);
+  name(P)=SKELT; offset(P)=term_units(0);
+  name(br(P))=NIL_0; son(br(P))=nil_term;
+  nextcl(C)=initclause(3,1);
+    setarg(CONS_2,P);
+    setarg(CONSULT_1,v(0));
+    closeclause();
+
+  /*
+     call(X):-X.
+  */
+  clause(CALL_1)=initclause(3,1);
+    setarg(CALL_1,v(0));
+    skelarg((0));
+    closeclause();
+
+  /*
+     D := `E :- !,$dass(D,X).
+     D := E :- $evaluate(X,E),!,$dass(D,X).
+  */
+  P=heapterms(2);
+  name(P)=SKELT; offset(P)=term_units(0);
+  name(br(P))=QUOTE_1; son(br(P))=v(1);
+  clause(ASSIGN_2)=C=initclause(4,2);
+    setarg(ASSIGN_2,P);
+    setarg(CUT_0,nil_term);
+    setarg(DASSIGN_2,vars(0,1));
+    closeclause();
+  nextcl(C)=initclause(5,3);
+    setarg(ASSIGN_2,vars(0,1));
+    setarg(EVALUATE_2,vars(2,1));
+    setarg(CUT_0,nil_term);
+    setarg(DASSIGN_2,vars(0,2));
+    closeclause();
+
+  /*
+     A=:=B :- $evaluate(AR,A),$evaluate(BR,B),!,$acomp(AR=:=BR).
+     etc.
+  */
+  arithclause(EQ_2);
+  arithclause(NE_2);
+  arithclause(LT_2);
+  arithclause(GT_2);
+  arithclause(LE_2);
+  arithclause(GE_2);
+
+}
+
+
+GLOBAL void DOASSERT(boolean pos)
+/* A1   databasereference       */
+{                          /* A2   position                */
+    REGISTER ATOM A;
+    register CLAUSE CL,C,CX;
+
+    if(pos && name(A1)!=UNBOUNDT) ARGERROR();
+
+    if((A=name(A0))==ARROW_2) A=name(arg1(A0)); 
+    if( (system(A) && !aSYSMODE) || class(A)!=NORMP) ERROR(SYSPROCE);
+    A=copyatom(A);
+    if(name(A2)==INTT && ival(A2)==0)
+      { 
+            CL=ADDCLAUSE(A0);
+            nextcl(CL)=clause(A);
+            clause(A)=CL;  
+      }
+    else
+    if(name(A2)==END_0)
+      { CL=ADDCLAUSE(A0);
+        if(non_nil_clause(C=clause(A)))
+          { while(non_nil_clause(CX=nextcl(C)))C=CX;
+            nextcl(C)=CL;  /* md: noetig ? */
+          }
+        else clause(A)=CL;
+        nextcl(CL)=nil_clause;
+      }
+    else if(name(A2)==DBREF_1)   
+      { CX= (CLAUSE)INTVALUE(son(A2));
+        TESTATOM(A,head(CX));
+        if(denied(CX)) ARGERROR();
+        nextcl(CL=ADDCLAUSE(A0))=nextcl(CX); nextcl(CX)=CL;
+      }  
+    else 
+      { int i;
+        i=INTVALUE(A2);
+        if(i < 0) ARGERROR();
+        if(i==0)
+          { 
+            CL=ADDCLAUSE(A0);
+            nextcl(CL)=clause(A);
+            clause(A)=CL;  
+          }
+        else
+          {
+            if((C=clause(A))==nil_clause)ABORT(ARGE);
+            while(--i>0) 
+              { C=nextcl(C); 
+                if(C==nil_clause) ARGERROR(); 
+              }
+            CL=ADDCLAUSE(A0);
+            nextcl(CL)=nextcl(C); nextcl(C)=CL;
+          }
+      }
+
+    if(pos) (void) UNI(A1,mkfunc(DBREF_1,mkint((int)CL)));
+    return;
+}
+
+GLOBAL void DOASSA(void)
+/* A0 term */
+{   
+    register ATOM A;
+    CLAUSE CL;
+    if((A=name(A0))==ARROW_2) A=name(arg1(A0)); 
+    if( (system(A) && !aSYSMODE) || class(A)!=NORMP) ERROR(SYSPROCE);
+    A=copyatom(A);
+    CL=ADDCLAUSE(A0);
+    nextcl(CL)=clause(A);
+    clause(A)=CL;  
+    return;
+}
+
+
+#ifdef DYNMEM
+GLOBAL CLAUSE clausechain;   /* used for retract */
+#else
+GLOBAL CLAUSE clausechain = nil_term;   /* used for retract */
+#endif
+
+GLOBAL void notecl(register CLAUSE CL)
+{ nextcl(CL)=clausechain;clausechain=CL; deny(CL); }
+
+GLOBAL void destroycl(register CLAUSE CL)
+{ register TERM T,B;
+  register int I;
+  B=CL; name(B)=INTT; /* makes freeterms going the right way */
+  T=body(CL); I=3;
+  /* the field nvars/nextcl should be cleared to avoid
+     errors in recursively freeing nonexisting term structures */
+  for(;;)
+  { I++; 
+    if(name(T)==nil_atom) { freeterms(I,B); break; }
+    next_br(T);
+  }
+}
+
+GLOBAL void retractclauses(void)
+{ /* this function should be called from toplevel */
+    register CLAUSE CL ;
+    while(non_nil_clause(CL=clausechain)){
+        clausechain=nextcl(CL);
+        destroycl(CL);
+    }
+    reclaim_heap(false);
+}
+
+
+LOCAL TERM GenTerm(CLAUSE CL, ENV CE)
+{
+    TERM H,B;
+    register TERM T,CP,BCE;
+
+    BCE=base(CE);
+    if(CL==nil_clause) ARGERROR();
+    if(name(body(CL))==nil_atom) 
+    { /* facts */
+      H=mkfreevar(); 
+      UNIFY(1,H,head(CL),BE,BCE,MAXDEPTH); 
+      return H;
+    }
+    CP=body(CL);
+    if(non_nil_atom(name(br(CP)))) 
+    { /* body contructed from several calls */
+        B=T=mkfunc(COMMA_2,mk2sons(UNBOUNDT,nil_term,UNBOUNDT,nil_term));
+        for(;;)
+        { UNIFY(1,son(T),CP,BE,BCE,MAXDEPTH);
+          next_br(CP);
+          if(name(br(CP))==nil_atom)
+          { T=br(son(T)); name(T)=UNBOUNDT;
+            UNIFY(1,T,CP,BE,BCE,MAXDEPTH);
+            break;
+          }
+          T=br(son(T)); 
+          name(T)=COMMA_2; 
+          son(T)=mk2sons(UNBOUNDT,nil_term,UNBOUNDT,nil_term);
+        }
+    }
+    else B=body(CL); /* body consisting of exactly one call */
+    /* compose term from head and body */
+    T=mkfunc(ARROW_2,mk2sons(UNBOUNDT,nil_term,UNBOUNDT,nil_term));
+    UNIFY(1,son(T),head(CL),BE,BCE,MAXDEPTH); 
+    UNIFY(1,br(son(T)),B,BE,BCE,MAXDEPTH);
+    return T;
+}
+
+GLOBAL boolean testheap(register CLAUSE CL)
+    /* true, if CL is an active goal */
+{ 
+    register ENV i;
+    register CLAUSE CP;
+    register TERM CALL;
+    ATOM A;
+    boolean result=false;
+
+    for(i=BASEENV;i<ENVTOP;inc_env(i))
+        if( non_nil_env(CALL=call(i)) && (A=name(CALL))>=FUNCNAME)
+            if( class(A)==NORMP && (rule(i)==CL))
+            { /* active goal */
+                result=true;
+                if( WARNFLAG) ws("WARNING: retract active goal\n");
+                CP=clause(A);
+                if(CP==CL) { rule(i)=DUMMYCL ; continue; }
+                while(non_nil_clause(CP)  && (nextcl(CP)!=CL))
+                  CP=nextcl(CP);
+                rule(i)=CP; 
+            }
+            else if(A==CLAUSE_2 && rule(i)==CL)
+            {   /* clause/2 is a  backtrackable built in, thats why
+                rule(i) is set to BCT with son(BCT)=nextclause */
+                result=true;
+                if(WARNFLAG) ws("WARNING: retract active clause\n");
+                rule(i)=nextcl(CL);
+            }
+    return result;
+}
+
+LOCAL void clearcl(register CLAUSE CL)
+{ 
+    register ATOM A; 
+    register CLAUSE hcl;
+    boolean active;
+    active=testheap(CL);
+    A=name(head(CL)); hcl=clause(A);
+    if(hcl==CL) 
+        clause(A)=nextcl(CL); 
+    else 
+    { 
+        while(nextcl(hcl) !=CL) hcl=nextcl(hcl);
+        nextcl(hcl)=nextcl(CL);
+    }
+    if(active)notecl(CL);else destroycl(CL);
+}
+
+
+
+GLOBAL boolean DORETRACT(boolean pos, boolean all)
+/* retract/1 a clause from database */
+{ ENV OC,NE ;
+ CLAUSE CL,NCL;
+ ATOM A;
+ OC=CHOICEPOINT;
+ if(pos && all)
+     SYSTEMERROR("datab.c/DORETRACT");
+ if(pos && name(A1)!=UNBOUNDT)
+ {
+    TESTATOM(DBREF_1,A1);
+    CL=(CLAUSE)INTVALUE(son(A1));
+    if(denied(CL))ARGERROR();
+    NE=NEWENV(var_sizes(CL));CHOICEPOINT=NE;
+    if(UNI(A0,GenTerm(CL,NE)))
+    { CHOICEPOINT=OC; clearcl(CL); return true; }
+    return false;
+  }
+ if(!all && !BCT)BCT=1;
+ A=name(A0);
+ if(A==ARROW_2) A=name(arg1(A0));
+ if(system(A)) ARGERROR();
+ CL=clause(A);
+ /* now CL is the first clause to check */
+ OC=CHOICEPOINT;
+ while(non_nil_clause(CL))
+ { NE=NEWENV(var_sizes(CL)); CHOICEPOINT=NE;
+   NCL=nextcl(CL);
+   if( !all && UNI(A0,GenTerm(CL,NE))) 
+     { CHOICEPOINT=OC; 
+       clearcl(CL); 
+       if(pos)return INTRES(A1,(int)CL); 
+       return true;
+     }
+   else if(all && UNIFY(1,A0,head(CL),BE,base(NE),MAXDEPTH))
+    { 
+        CHOICEPOINT=OC; 
+        clearcl(CL); 
+    }
+   KILLSTACKS(NE);
+   CL=NCL;
+ }
+ return(all);
+}
+
+
+GLOBAL boolean DOCLAUSE(boolean third_arg)
+{ CLAUSE CL=nil_clause;
+  TERM T;
+  ENV NE;
+  boolean u;
+  
+ if(third_arg && (name(A2)!=UNBOUNDT))
+ {
+    TESTATOM(DBREF_1,A2);
+    CL=(CLAUSE)INTVALUE(son(A2));
+    if(denied(CL))ARGERROR();
+    NE=NEWENV(var_sizes(CL));
+    T=GenTerm(CL,NE);
+    if(name(T)==ARROW_2)
+        return UNI(A0,son(T)) && UNI(A1,br(son(T)));
+    else
+        return UNI(A0,T) && UNI(A1,mkatom(TRUE_0));
+ }
+
+ if(BCT) CL= (CLAUSE)(BCT);
+ else { ATOM A; A=name(A0);
+ if(A<FUNCNAME)ARGERROR();
+        if(system(A))return false;
+        CL=clause(A);
+      }
+ while(non_nil_clause(CL))
+ { NE=NEWENV(var_sizes(CL));
+   T=GenTerm(CL,NE);
+   if(name(T)==ARROW_2)
+      u=UNI(A0,son(T)) && UNI(A1,br(son(T)));
+   else
+      u=UNI(A0,T) && UNI(A1,mkatom(TRUE_0));
+   if(u){ 
+       BCT= (int)nextcl(CL);
+       if(third_arg)return UNI(A2,mkfunc(DBREF_1,mkint((int)CL)));
+       return true;
+       }   
+   CL=nextcl(CL);
+   KILLSTACKS(NE);
+ } 
+ return false;
+}
+
+GLOBAL void  abolish(ATOM A)
+{ register CLAUSE CL,CL1;
+  if(system(A))return;
+  CL=clause(A); clause(A)=nil_clause;
+  while(non_nil_clause(CL))
+    { CL1=CL;CL=nextcl(CL); 
+      if (testheap(CL1)) notecl(CL1); else destroycl(CL1); 
+    }
+}
+
+GLOBAL void  DOABOLISH(int i)
+{
+    ATOM A;
+    if(i==2)
+    {   CHECKATOM(A0);
+        if(A=LOOKATOM(name(A0),-INTVALUE(A1))) abolish(A);
+        return; 
+    }
+    if(isatom(A0))
+    {
+        for(i=0;i<=MAXARITY;i++)
+          if(non_nil_atom(A=LOOKATOM(name(A0),-i))) abolish(A);
+        return ;
+    }
+    if(non_nil_atom(A=atom(A0))) abolish(A);
+}
+    
+
+GLOBAL boolean DOCONSULT(boolean reconsult)
+{
+    TERM X;
+    ATOM A,FILEATOM;
+    ATOM LASTA=nil_atom;
+    CLAUSE LASTCL=nil_term;
+    ENV EP,OLDE;
+    TERM oldfilename;
+    CLAUSE CX,CL;
+    boolean res=true;
+
+    EP=E;
+    if(name(A0)==MINUS_1){ A0=arg1(A0); reconsult=true;}
+    if(reconsult)
+      for(A=GetAtom(nil_atom);non_nil_atom(A);A=GetAtom(A)) setnotrc(A);
+    CHECKATOM(A0);
+    if((FILEATOM=name(A0))==USER_0) FILEATOM=STDIN_0;;
+    oldfilename=FNAME(inputfile);
+    if((inputfile=OpenFile(phy_name(FILEATOM),read_mode))<0)
+        { FileError(CANTOP);res=false;goto exit;}
+    FLOGNAME(inputfile)=copyatom(FILEATOM);
+
+    while(! HALTFLAG)
+    {   
+        retractclauses();
+        CHOICEPOINT=OLDE=E=NEWENV(0); BE=base(E);
+        if(VERBOSE && MODE!=SYSM)
+            if(FILEATOM==STDIN_0) ws("user >"); 
+            else if(!ECHOFLAG) ws(".");
+        X=READIN();
+        A=name(X);
+        if(A==END_0) HALTFLAG=true;  
+        else if(A==QUESTION_1 || A==ARROW_1 )
+        { 
+            LASTA=nil_atom;
+            name(X)=CALL_1; 
+            if( ! EXECUTE(X,E) && WARNFLAG && A!=ARROW_1)
+                ws("WARNING: goal failed during consult/reconsult");
+        }
+        else 
+        {  
+            if(A ==ARROW_2) A=name(arg1(X));
+            if((system(A) && !aSYSMODE) || class(A) !=NORMP)
+                ABORT(SYSPROCE);
+            A=copyatom(A);
+            if(reconsult && !rc(A)) 
+              { setrc(A); abolish(A); }
+            /* inline code for assert */        
+            if(non_nil_clause(CX=clause(A)))
+            {
+                if(non_nil_atom(A) && A==LASTA) CX=LASTCL;
+                else
+                    while(non_nil_clause(CL=nextcl(CX)))CX=CL;
+                nextcl(CX)=CL=ADDCLAUSE(X);
+                if(WARNFLAG && LASTA !=A)
+                {
+                    ws("WARNING: new clauses for ");
+                    wq(A);ws("/");wi(arity(A));
+                    ws("\n");
+                }
+            }
+            else
+                clause(A)=CL=ADDCLAUSE(X);
+            nextcl(CL)=nil_clause; 
+            LASTA=A;
+            LASTCL=CL;
+        }
+        KILLSTACKS(OLDE);
+    }
+  exit:
+    HALTFLAG=false;
+    CloseFile(inputfile);
+    inputfile=OpenFile(oldfilename,read_mode);
+    ISEOF(inputfile)=false;
+    E=EP; BE=base(E);
+    return res;
+}
+
+GLOBAL boolean DOENSURE(void)
+{
+    ATOM A;
+    register int ARITY;
+    register string s;
+    if(!(isatom(A0) && isatom(A1))) ARGERROR();
+    if(name(A2) !=INTT) ARGERROR();
+    ARITY=ival(A2);
+    if(ARITY < 0 || ARITY > MAXARITY) ARGERROR();
+    A=LOOKUP(tempcopy(name(A1)),ARITY,false);
+    A=copyatom(A);
+    if(ensure(A)) return true;
+    STARTATOM();
+    s=tempcopy(name(A0));
+    while(*s)ATOMCHAR(*s++);
+    s=tempcopy(name(A1));
+    while(*s)ATOMCHAR(*s++);
+    ATOMCHAR('.');
+    s=itoa(ARITY);
+    while(*s)ATOMCHAR(*s++);
+    ATOMCHAR(0); /* terminate string */
+    if(!FileExist(NEWATOM)) return false;
+    setensure(A);
+    A0=mkatom(LOOKUP(NEWATOM,0,false));
+    DOCONSULT(false);
+    return true;
+}
+

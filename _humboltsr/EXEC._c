@@ -1,0 +1,465 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     **
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+#include "systems.h"
+#include "types.h"
+#include "errors.h"
+#include "atoms.h"
+#include "manager.h"
+
+/* 
+
+EXECUTE
+
+Execute is the finite state control of the abstract Prolog machine. It
+executes the goal by manipulating the local and global stacks,
+and uses UNIFY to match goals against clauses from the
+database. CALLEVALPRED handles evaluable predicates.
+
+*/
+
+
+IMPORT boolean EVENT,UserAbort;  /* from signal handler in prolog.c */
+IMPORT boolean ENAB_INTR;
+IMPORT ENV CHOICEPOINT,ENVTOP;
+IMPORT boolean SPYTRACE,WARNFLAG;
+IMPORT ENV NEWENV();                  
+IMPORT void ABORT(),SYSTEMERROR();      /* from linebufffer.c */
+IMPORT CLAUSE ANDG,OR1G,OR2G,IMPG;
+IMPORT TERM GLOTOP,HEAPTOP;
+IMPORT ATOM ATOMSTOP;
+IMPORT STRING STRINGSTOP;
+IMPORT TRAIL TRAILEND;
+IMPORT ATOM LASTATOM;
+IMPORT void wq();
+IMPORT TERM mk2sons();
+IMPORT boolean UNIFY();
+IMPORT TERM DOEVAL();
+IMPORT void CALLEVALPRED();   /* from evalpreds.c */
+IMPORT boolean TRACE();
+IMPORT void reclaim_heap();
+IMPORT ATOM LOOKUP();
+IMPORT string ERRORMSG();
+
+/* 
+EXPORT int BCT;
+EXPORT boolean EXECUTE();
+*/
+
+int BCT=0;
+
+int ERRORFLAG=0;
+
+boolean RES ; /* result from callevalpred */
+
+#if P8000 && SMALLVERSION
+  LOCAL TERM BASE;
+  LOCAL int ARITY;
+  LOCAL ENV CHP;
+#endif
+
+GLOBAL boolean EXECUTE (REGISTER TERM CALLP, REGISTER ENV CALLENV)
+{ auto ENV CALLTOP;
+  REGISTER ENV ENVP;
+  REGISTER CLAUSE CP;
+  register ATOM A;
+#if RISCOS 
+  static int pollctr = 0;
+#endif
+#if ! (P8000 && SMALLVERSION)
+  TERM BASE;
+  int ARITY;
+  ENV CHP;
+#endif
+
+  /* GOALENV=CALLENV;*/
+  CALLTOP=ENVTOP;
+
+  CALLP=mk2sons(name(CALLP),son(CALLP),nil_atom,nil_term);
+
+  /* Finite State Automata controlling Prolog execution */
+
+  CALLQ:
+#if BIC
+         /* Check if a key was pressed */
+         if(*((int *)(0xf297))!= *((int *)(0xf299)))
+           { EVENT=true; UserAbort=true; 
+           }
+#endif
+#if RISCOS 
+         if( ++pollctr > 30 ) {
+            pollctr = 0;
+            if( _kernel_escape_seen() )
+            { EVENT=true; UserAbort=true;
+            }
+         }
+#endif
+         if(EVENT)
+         {  if(UserAbort && ENAB_INTR)
+            { UserAbort=false; EVENT=SPYTRACE;
+              if(clause(INTERRUPT_0)==nil_clause) ABORT(ABORTE);
+              if(non_nil_atom(name(CALLP)))
+                  CALLP=mk2sons(INTERRUPT_0,nil_term,GOTO_1,CALLP);
+              else
+                  CALLP=mk2sons(INTERRUPT_0,nil_term,nil_atom,nil_term);
+                
+            }
+            if(ERRORFLAG)
+            { TERM T;
+              if(clause(ERROR_2)==nil_clause) ABORT(ERRORFLAG);
+              T=mk2sons(UNBOUNDT,nil_term,
+                        LOOKUP(ERRORMSG(ERRORFLAG),0,false),nil_term);
+              UNI(T,CALLP);
+              if(non_nil_atom(name(br(CALLP))))
+                  CALLP=mk2sons(ERROR_2,T, GOTO_1,br(CALLP));
+              else
+                  CALLP=mk2sons(ERROR_2,T,nil_atom,nil_term);
+              ERRORFLAG=0;
+            }
+            if(SPYTRACE) 
+               { if(name(CALLP)!=GOTO_1 && class(name(CALLP))!=VARP)
+                 if(TRACE(CALL_0,CALLP,CALLENV)==false) goto FAILQ; }
+
+         EVENT=SPYTRACE;
+         }
+        /* CALLP holds a goal and CALLENV its environment. */
+        A=name(CALLP);
+#if  HACKY
+        ++nrofcalls(A);
+#endif 
+        if(A>=LASTATOM && non_nil_clause(CP=clause(A)))
+                      goto PROCQ;  /* ----------------------->> PROCQ */
+        switch(class(A))
+        { case NORMP:
+              if(non_nil_clause(CP=clause(A))) 
+                      goto PROCQ;  /* ----------------------->> PROCQ */
+              if(non_nil_clause(clause(UNKNOWN_1)))
+              { TERM T;
+                T=mkfreevar();UNI(T,CALLP);
+                if(non_nil_atom(name(br(CALLP))))
+                    CALLP=mk2sons(UNKNOWN_1,T,GOTO_1,br(CALLP));
+                else
+                    CALLP=mk2sons(UNKNOWN_1,T,nil_atom,nil_term);
+                goto CALLQ;
+              }
+              if(WARNFLAG)
+                { ws("WARNING: no clause for relation ");
+                  wq(A);ws("/");wi(arity(A));ws("\n");
+                }
+              goto FAILQ; /* -------------------------------->> FAILQ */
+
+        case FAILP: 
+              goto FAILQ; /* -------------------------------->> FAILQ */
+
+        case ISVARP: 
+              { register TERM T;
+                T=son(CALLP);
+                deref_(T,base(CALLENV));
+                if (name(T)==UNBOUNDT) goto RETURNQ;
+                goto FAILQ;
+              }
+
+        case ISATOMP: 
+              { register TERM T;
+                T=son(CALLP);
+                deref_(T,base(CALLENV));
+                if (isatom(T)) goto RETURNQ;
+                goto FAILQ;
+              }
+
+        case ISINTEGERP:
+              { register TERM T;
+                T=son(CALLP);
+                deref_(T,base(CALLENV));
+                if (is_integer(name(T))) goto RETURNQ;
+                goto FAILQ;
+              }
+
+        case ISMEMBP:
+             { register TERM T;
+               int I=0;
+               TERM TT,A0;
+               ATOM A,AA;
+               E=CALLENV; BE=base(CALLENV);
+               T=son(CALLP); deref(T); A=name(A0=T);
+               T=br(son(CALLP)); deref(T); 
+               if (A==COLON_2) AA=name(arg1(A0)); else AA=0;
+               while (name(T)==CONS_2)
+               { I++;
+                 TT=son(T); deref(TT);
+                 if (name(TT)==UNBOUNDT) 
+                    if (UNI(son(T),A0)) goto RETURNQ;
+                    else goto FAILQ;
+                 if ((name(TT)==A || A==UNBOUNDT) && UNI(son(T),A0)) 
+                      goto RETURNQ;
+                 if (I>100000) return false; /* probably cyclic term */
+                 T=br(son(T));
+                 deref(T);
+               }
+               goto FAILQ;
+             }
+
+        case NOMEMBP:
+             { register TERM T;
+               int I=0;
+               TERM TT,A0;
+               ATOM A,AA;
+               E=CALLENV; BE=base(CALLENV);
+               T=son(CALLP); deref(T); A=name(A0=T);
+               T=br(son(CALLP)); deref(T); 
+               if (A==COLON_2) AA=name(arg1(A0)); else AA=0;
+               while (name(T)==CONS_2)
+               { I++;
+                 TT=son(T); deref(TT);
+                 if (name(TT)==UNBOUNDT) 
+                    if (UNI(son(T),A0)) goto FAILQ;
+                    else goto RETURNQ;
+                 if ((name(TT)==A || A==UNBOUNDT) && UNI(son(T),A0)) 
+                      goto FAILQ;
+                 if (I>100000) return false; /* probably cyclic term */
+                 T=br(son(T));
+                 deref(T);
+               }
+               goto RETURNQ;
+             }
+
+        case CUTP:
+              ENVP=CALLENV;
+              { register CLAUSE RC;
+                RC=rule(ENVP);
+                while(ENVP>CALLTOP  && 
+
+                ( RC >=IMPG || RC==nil_clause)
+/*
+                 (RC==IMPG || RC==ANDG || RC==OR1G || RC==OR2G 
+                            || RC==nil_clause ) 
+*/
+                  )
+                  { ENVP=env(ENVP); RC=rule(ENVP); }
+              }
+              CHOICEPOINT=choice(ENVP);
+              goto RETURNQ; /* ---------------------------->> RETURNQ */
+
+         case ARITHP:
+               /* predicate $evaluate */
+               CALLP=DOEVAL(CALLP,CALLENV);
+               if(ERRORFLAG)goto CALLQ;
+               goto RETURNQ; /*--------------------------->> RETURNQ */
+
+        case EVALP:
+              { CALLEVALPRED(CALLP,CALLENV);
+                if(ERRORFLAG) goto CALLQ;
+                if(RES) 
+                  goto RETURNQ; /* ----------------------->> RETURNQ */
+                goto FAILQ; /*------------------------------>> FAILQ */
+              }  
+
+        case VARP:
+              { register TERM T;
+                T=br(CALLP); 
+                deref_(CALLP,base(CALLENV));
+                if(name(CALLP)<FUNCNAME) ABORT(CALLE);
+                if(non_nil_atom(name(T)))
+                   CALLP=mk2sons(name(CALLP),son(CALLP),GOTO_1,T);
+                else
+                   CALLP=mk2sons(name(CALLP),son(CALLP),nil_atom,nil_term);
+
+              }
+              goto CALLQ; /* ------------------------------>> CALLQ */
+              
+        case GOTOP:
+              CALLP=son(CALLP);
+              if(non_nil_term(CALLP) && name(CALLP)) 
+                  goto CALLQ; /* ------------->> CALLQ */
+              goto RETURNQ; /* ---------------------------->> RETURNQ */
+
+        case BTEVALP:
+              BCT=0;
+  REDOEVALQ:
+            { register ENV RE;
+              /*RE=NEWENV((int)arity(A));*/ /* ??????? md ??????? */
+              RE=NEWENV(term_units(1)); 
+              call(RE)=CALLP; env(RE)=CALLENV; 
+              rule(RE)=(CLAUSE)BCT;
+              CHP=CHOICEPOINT;
+              CHOICEPOINT=RE;
+              CALLEVALPRED(CALLP,CALLENV);
+              if(RES)
+                { 
+                  if(BCT) rule(RE)= (CLAUSE)BCT;
+                  /* saves backtracking information */
+                  else CHOICEPOINT=CHP ;
+                  goto RETURNQ; /* ------------------->> RETURNQ */
+                }
+              CHOICEPOINT=CHP;
+              if(ERRORFLAG) goto CALLQ; /* ------------->> CALLQ  */
+              goto FAILQ; /* ---------------------------->> FAILQ */
+            }
+         }
+  PROCQ:
+      /* CP points to a chain of untried clauses */
+      /* A==name(CALLP) */
+       
+        { register ENV CH=CHOICEPOINT;
+          if(CH<CALLENV) ENVP=CALLENV; 
+          else ENVP=CH; 
+          if(inc_env(ENVP)>=MAXENVS) ABORT(FRAMESPACEE); 
+          ENVTOP=ENVP;  
+
+          choice(ENVP)=CHP=CH;
+          base(ENVP)=BASE=GLOTOP;
+          trail(ENVP)=TRAILEND;
+        }
+
+        if((ARITY=arity(A))==0) 
+        /* parameterless call --> no indexing, direct clause access */
+          { register TERM T;
+            T=GLOTOP; 
+            if((GLOTOP+=var_sizes(CP))>=HEAPTOP) reclaim_heap(true);
+            while(T<GLOTOP) { name(T)=UNBOUNDT; inc_term(T); } 
+            if(non_nil_clause(nextcl(CP))) 
+              { CHOICEPOINT=ENVP; atomtop(ENVP)=ATOMSTOP; }
+            goto UNIFIED;
+          }
+
+        /* A:=name of actual first parameter (for indexing) */
+        { register TERM T;
+          T=son(CALLP);
+          deref_(T,base(CALLENV));
+          A=name(T);
+        }
+        for(;;)
+          { CLAUSE CPP;
+            /* advance CP to the first applicable clause */
+            if(A>FUNCNAME)
+             { register ATOM AA;
+               /* simplified indexing: check name(son(head)) */
+func:
+                AA=name(son(head(CP))); 
+                if(AA > FUNCNAME && AA !=A)
+                  { if(non_nil_clause(CP=nextcl(CP))) 
+                         /* continue; */ goto func;
+                    CHOICEPOINT=CHP; goto FAILQ; /* --------->> FAILQ */
+                  }
+                for(CPP=nextcl(CP);non_nil_clause(CPP);CPP=nextcl(CPP))
+                {
+                  AA=name(son(head(CPP))); 
+                  if(AA < FUNCNAME || AA==A)
+                    { CHOICEPOINT=ENVP; atomtop(ENVP)=ATOMSTOP;
+                      break; 
+                    } 
+                }
+             }
+            else if(non_nil_clause(CPP=nextcl(CP))) 
+                  { CHOICEPOINT=ENVP; atomtop(ENVP)=ATOMSTOP; }
+
+            { register TERM T;
+              T=BASE; 
+              if((GLOTOP=T+=var_sizes(CP))>=HEAPTOP) reclaim_heap(true);
+              while(BASE < T) { dec_term(T);name(T)=UNBOUNDT;} 
+
+              if(UNIFY(ARITY,son(CALLP),son(head(CP)),
+                 base(CALLENV),T,MAXDEPTH)) goto UNIFIED; 
+
+            }
+            CP=CPP;
+
+        /* nextclause: */
+            if(CP==nil_term) 
+              { CHOICEPOINT=CHP; goto FAILQ; } /* ---------->> FAILQ */
+          }
+
+  UNIFIED:
+        call(ENVP)=CALLP; env(ENVP)=CALLENV; 
+
+        inc_env(ENVTOP); rule(ENVP)=CP;
+        { register TERM T;
+          if(non_nil_atom(name(T=body(CP))))
+           { CALLENV=ENVP; CALLP=T; goto CALLQ; } /* ------>> CALLQ */
+          /* ---------------------------------------------->> RETURNQ */
+        }
+        
+  RETURNQ:
+      /* The subgoal in CALLP has just succeeded. */
+     if(SPYTRACE)
+      { TRACE(PROVED_0,CALLP,CALLENV);
+        /* if(CALLENV>GOALENV) */
+        if(CALLENV>=CALLTOP)
+          { if(non_nil_term(CALLP) && name(next_br(CALLP))) 
+               goto  CALLQ; /* ------------------------------>> CALLQ */
+            CALLP=call(CALLENV); 
+            CALLENV=env(CALLENV);
+            goto RETURNQ; } /* ---------------------------->> RETURNQ */
+      }
+     else
+      { register ENV RE; 
+        /* RE=GOALENV; */
+        RE=CALLTOP;
+        /* while(CALLENV>RE) */
+        while(CALLENV>=RE) 
+          { if(non_nil_term(CALLP) && name(next_br(CALLP))) 
+               goto  CALLQ; /* ------------------------------>> CALLQ */
+            CALLP=call(CALLENV); 
+            CALLENV=env(CALLENV);
+          } 
+      }
+    return true;  /* >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> return */
+
+  FAILQ:
+      /* Failure has occurred.  'choicepoint' is the newest
+                     environment with a nondeterminate choice. */
+        if(SPYTRACE) TRACE(FAILED_0,CALLP,CALLENV);
+        if(CHOICEPOINT>CALLTOP)
+          { 
+            /* temporary using A as variable of type  TRAIL */
+            { register TRAIL T,TT;
+              TT=TRAILEND; T=TRAILEND=trail(CHOICEPOINT);
+              while(T<TT) 
+               { name(boundvar(T))=UNBOUNDT; inc_trail(T); }
+            }
+            { register ENV CH;
+              CH=CHOICEPOINT;
+              CALLP=call(CH); 
+              CALLENV=env(CH); 
+              CP=rule(CH);
+              ATOMSTOP=atomtop(CH);
+              STRINGSTOP= (STRING)nextatom(ATOMSTOP);
+              GLOTOP=base(CH);
+              ENVTOP=CH;
+              CHOICEPOINT=choice(CH);
+            }
+            /* end of KILLSTACKS */
+            if(class(A=name(CALLP))==BTEVALP)
+            { if(!(BCT= (int)CP)) goto FAILQ; /* ----->> FAILQ */
+              if(SPYTRACE) 
+                if(TRACE(REDO_0,CALLP,CALLENV)==false) goto  FAILQ; 
+              goto REDOEVALQ; /* ----------------------->> REDOEVALQ */
+            }
+            if( CP==DUMMYCL) CP=clause(A);
+            else if(CP==nil_clause) goto FAILQ; /* ----->> FAILQ */
+                 else CP=nextcl(CP);
+            if(CP==nil_clause) goto FAILQ; /* ----------->>  FAILQ */
+            if(SPYTRACE) 
+              if(TRACE(REDO_0,CALLP,CALLENV)==false) goto  FAILQ;
+            goto PROCQ; /* --------------------------------->> PROCQ */
+          }
+        BCT=0;
+        return false;  /* >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>> return */ 
+  }
+  /* Execute */
+
+
+

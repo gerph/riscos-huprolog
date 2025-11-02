@@ -1,0 +1,921 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     **
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+#include "systems.h"
+#include "types.h"
+#include "errors.h"
+#include "atoms.h"
+#include "manager.h"
+
+/*
+ATOM TABLE
+Each atom is associated with operator and clause information which is
+stored in an 'atomentry'.  The identifiers for atoms in the input are
+mapped to the corresponding entry through a hash table.  Collisions are
+handled by chaining together atom entries. 
+*/
+
+IMPORT ATOM BASEATOM,ATOMSTOP,ATOMHTOP;
+IMPORT STRING STRINGSTOP; 
+IMPORT TERM BASETERM,GLOTOP;
+IMPORT void ARGERROR(),ERROR(),ABORT();
+IMPORT TERM A0,A1,A2;
+IMPORT string strcat();                  /* from CLIB */
+IMPORT boolean WARNFLAG;       /* from prolog.c        */
+IMPORT boolean aSYSMODE;
+IMPORT ATOM heapatom(),stackatom();
+IMPORT STRING heapstring(),stackstring();
+IMPORT int INTVALUE();
+IMPORT void TESTATOM();
+IMPORT boolean UNIFY();
+IMPORT void wq();
+IMPORT void CHECKATOM();
+
+/*
+EXPORT   ATOM LOOKUP(string,int,boolean);
+EXPORT   ATOM LOOKATOM(ATOM,int);
+EXPORT   ATOM atom(TERM),copyatom(ATOM),GetAtom(ATOM);
+EXPORT   TERM LISTREP(string);
+EXPORT   string NEWATOM;
+EXPORT  void STARTATOM(),ATOMCHAR();
+EXPORT   InitAtoms();
+EXPORT  void DOOP();
+EXPORT   ATOM LASTATOM;
+EXPORT   void InitUAtom();
+*/
+
+
+GLOBAL ATOM LASTATOM=LAST_ATOM;
+
+#define HASHSIZE 0x100
+GLOBAL ATOM  HASHTAB [HASHSIZE+1];
+GLOBAL int HASH_SIZE=HASHSIZE; /* for save.c */
+
+#define hashcode(C1,C2)     ((((C1) & 0x7f)<<1)|     \
+			    ((((C1)?(C2):0)&0x40)>>6))
+#define strhash(S)     hashcode(*S,*(S+1))
+LOCAL int idhash(ATOM A)
+{ register STRING index; index=longstring(A);
+  return hashcode(repchar(index),repchar(index+1));
+}
+
+/* create an new atom */
+
+#if !BIT8
+#define STRINGSPACE 256 /* Size of string buffer. */
+#endif
+#if BIT8
+#define STRINGSPACE 128 /* Size of string buffer. */
+#endif
+
+GLOBAL char stab[STRINGSPACE]; /* also used in help.c */
+
+string NEWATOM=stab;
+LOCAL int NEWINDEX;
+
+GLOBAL void STARTATOM (void)
+{ NEWATOM=stab; NEWINDEX=0; }
+
+GLOBAL void ATOMCHAR (register char C)
+{ if(NEWINDEX>=STRINGSPACE) ERROR(aSTRINGSPACEE);
+  stab[NEWINDEX++]=C;
+}
+
+/* #if !POINTEROFFSET */
+LOCAL int idstrcmp(ATOM A, register string S)
+{ register STRING index;
+  index=longstring(A);
+  while(*S==repchar(index)) {if(*S++) index++; else return 0;}
+  return (repchar(index) - *S);
+}
+/* #endif
+#if POINTEROFFSET
+#define idstrcmp(A,s)   strcmp(longstring(A),s)
+#endif
+*/
+LOCAL ATOM CONSTATOM;  /* used during initialization only */
+LOCAL boolean INIT;
+
+LOCAL void initfields(register ATOM A, register int AR)
+{
+      info(A)=0;
+      oprec(A)=0; 
+      clause(A)=nil_clause;
+      arity(A)=AR;
+      nextatom(A)=chainatom(A)=nil_atom;
+}
+
+/* Enter an atom and return its value. */
+GLOBAL ATOM LOOKUP (string str, int ar, boolean heap)
+/*  search and create only in heap */
+{ 
+    register ATOM A,OA;
+    ATOM NA,CHAINATOM,HASHATOM;
+    int cmp,H,nf;
+    boolean create;
+
+/*****************************************/
+/*    heap=true; */
+/*****************************************/
+    OA=NA=CHAINATOM=nil_atom;
+    nf=0;
+    H=strhash(str);
+#if DEBUG
+    if(DEBUGFLAG) 
+    { out_1("\nLOOKUP:");out_1(str);out_1("/");out_1(itoa(ar));
+      out_1(heap ? " heap " : " stack ");
+      out_1("hash:");out_1(itoa(H));out_1(";");out_1(itoa(HASHTAB[H]));
+    }
+#endif
+    if(ar < 0 ) { ar= -ar; create=false;} else create=true;
+    if(ar > MAXARITY) ERROR(BADARITYE);
+    HASHATOM=HASHTAB[ H ];
+    if(HASHATOM) /* search in primary chain */
+    {
+#if DEBUG
+    if(DEBUGFLAG) 
+        { out_1("#"); }
+#endif
+        OA=A=HASHATOM;
+        while(non_nil_atom(A) && (cmp=idstrcmp(A,str)) < 0)
+        {OA=A;A=nextatom(A);nf++;}
+        if(A && cmp==0) NA=A;
+        while(non_nil_atom(A) && (cmp=idstrcmp(A,str))==0 && 
+	  (hide(A) || private(A)))
+        {
+#if DEBUG
+            if(DEBUGFLAG)
+            {
+                out_1("{");
+                out_1(itoa(A));
+                if(A)
+                {
+                    out_1(";");out_1(itoa(cmp));
+                    out_1(";");out_1(itoa(hide(A)));
+                    out_1(";");out_1(itoa(private(A)));
+                    out_1(";");out_1(itoa(nextatom(A)));
+
+                }
+                out_1("}");
+            }
+#endif
+            OA=A;A=nextatom(A);nf++;
+        }
+        if(!A) cmp=1;
+        if(A && cmp==0) /* search in secondary chain */
+        {
+	    int AA,OAA;
+#if DEBUG
+            if(DEBUGFLAG) out_1("@");
+#endif
+            nf++;
+            CHAINATOM=NA=OA=A;
+	    AA=OAA=arity(A);
+            while(non_nil_atom(A) && !(ar==AA ||
+                         (ar < AA && ar > OAA) ||
+                         (ar < AA && OAA > AA)
+                        ))
+            { OA=A; OAA=AA; A=chainatom(A); AA=arity(A);}
+            if( A && ar==AA) goto found;
+        }
+    }
+    if(!heap)  /* search atom in stack */
+    {
+        for(A=ATOMSTOP;A<MAXATOMS;inc_atom(A))
+            if(idstrcmp(A,str)==0)
+            { NA=A; if(ar==arity(A))goto found; }
+    }
+    if(create) /* create atom */
+    {
+        if(INIT) A=CONSTATOM;
+        else if(heap) A=heapatom();
+        else { STRINGSTOP=(STRING)nextatom(ATOMSTOP); A=stackatom(); }
+        if( NA ) longstring(A)=longstring(NA);
+        else if(heap) longstring(A)=heapstring(str);
+        else longstring(A)=stackstring(str); 
+        initfields(A,ar);
+        setfirst(A);
+        if(heap) 
+        {
+            if(HASHATOM==nil_atom || nf==0 )
+            {
+                nextatom(A)=HASHTAB[H];
+                HASHTAB[H]=A;goto found;
+            }
+            if(cmp !=0)  
+            {
+                nextatom(A)=nextatom(OA);
+                nextatom(OA)=A;
+            }
+            else
+            {
+                setnotfirst(A);
+                chainatom(A)=chainatom(OA);
+                nextatom(A)=CHAINATOM;
+                chainatom(OA)=A;
+                
+            }
+        }
+        else
+            nextatom(A)= (card)STRINGSTOP;
+    }
+    else A=nil_atom;
+  found:
+    STARTATOM();
+#if DEBUG
+    if(DEBUGFLAG){ out_1(itoa(A));out_1("\n");}
+#endif
+    return A;
+}
+
+LOCAL char tempstring[STRINGSPACE];
+
+#if !POINTEROFFSET
+GLOBAL string tempcopy(ATOM A)
+{ register int si; 
+  register STRING i;
+  register char CH; 
+  i=longstring(A); 
+  for(CH=repchar(i),si=0;tempstring[si++]=CH;CH=repchar(++i))
+     if(si>=STRINGSPACE) ERROR(ATOMSPACEE);
+  return tempstring;
+}
+#endif
+
+GLOBAL ATOM modify(ATOM A)
+{ register int si; 
+  register STRING i;
+  register char CH; 
+  i=longstring(A); 
+  for(CH=repchar(i),si=0;tempstring[si++]=CH;CH=repchar(++i))
+     if(si+1>=STRINGSPACE) ERROR(ATOMSPACEE);
+  si--; tempstring[si++]='_'; tempstring[si++]=0;
+  return LOOKUP(tempstring,arity(A),true);
+}
+
+GLOBAL ATOM LOOKATOM(register ATOM A, register int ar)
+{
+    register ATOM OA;
+    ATOM AA;
+    boolean create;
+    boolean heap=false;
+    if(ar < 0 ) { ar= -ar; create=false;} else create=true;
+    if(ar > MAXARITY) ERROR(BADARITYE);
+    AA=A;
+#if DEBUG
+    if(DEBUGFLAG)
+    {
+        out_1("\nLOOKATOM:("),out_1(tempcopy(A)),
+        out_1(","),out_1(itoa(A)),out_1(","),out_1(itoa(ar));
+        out_1(")");
+    }
+#endif
+    if(A <=ATOMHTOP) /* A is an heapatom */
+    {
+        if(arity(A)==ar) return A;
+        if(private(A) || hide(A)) heap=true;
+#if DEBUG
+        if(DEBUGFLAG) { out_1(heap ? "<heap>" : "<stack>"); }
+#endif
+        if(!first(A)) A=nextatom(A);
+        OA=A;
+        while(non_nil_atom(A) && !(ar==arity(A) ||
+                     (ar < arity(A) && ar > arity(OA)) ||
+                     (ar < arity(A) && arity(OA) > arity(A))
+                    ))
+        { OA=A;A=chainatom(A);
+        }
+        if(A && arity(A)==ar) 
+        {
+#if DEBUG
+        if(DEBUGFLAG) { out_1("<found:");out_1(itoa(A));out_1(">"); }
+#endif
+            return A;
+        }
+        if(heap)
+            if(create)
+            {
+                A=heapatom();
+                longstring(A)=longstring(OA);
+                initfields(A,ar);
+                chainatom(A)=chainatom(OA);
+                chainatom(OA)=A;
+                nextatom(A)=  (first(OA) ? OA : nextatom(OA));
+                if(private(OA))setprivate(A);
+                if(hide(OA))sethide(A);
+#if DEBUG
+        if(DEBUGFLAG) { out_1("<create:");out_1(itoa(A));out_1(">"); }
+#endif
+                return A;
+            }
+            else return nil_atom;
+    }
+#if DEBUG
+        if(DEBUGFLAG) { out_1("<call LOOKUP>"); }
+#endif
+    return LOOKUP(tempcopy(AA),(create ? ar : -ar),heap);
+}
+
+GLOBAL ATOM atom(register TERM X)
+{ 
+  if(name(X)!=DIVIDE_2) ARGERROR();
+  return LOOKATOM(name(arg1(X)),INTVALUE(arg2(X)));
+}
+
+GLOBAL ATOM copyatom(register ATOM A)
+/* copy an Atom A to the heap */
+{
+    register ATOM NA;
+    register TERM T;
+    if(A <=  ATOMHTOP) return(A); /* do nothing */
+    NA=LOOKUP(tempcopy(A),(int)arity(A),true);
+    for(T=BASETERM;T<=GLOTOP;inc_term(T))
+      {  if(name(T)==A) name(T)=NA; }
+    setrc(NA); /* for reconsult */
+    return NA;
+}
+
+
+LOCAL void PRIVATE(register ATOM A)
+{
+    A=copyatom(A);
+    if(!first(A)) A=nextatom(A);
+    while(non_nil_atom(A)) { setprivate(A); A=chainatom(A); }
+    return;
+}
+    
+LOCAL void HIDE(register ATOM A)
+{
+    register string str;
+    register int cmp;
+    ATOM AA=nil_atom;
+    A=copyatom(A);
+    str=tempcopy(A);
+    if(!first(A)) A=nextatom(A);
+    while(non_nil_atom(A)) { sethide(A); A=chainatom(A); }
+    A=HASHTAB[strhash(str)];
+    while(non_nil_atom(A) && (cmp=idstrcmp(A,str)) <=0 )
+    {
+        if(cmp==0 && !hide(A) && private(A)) AA=A;
+        A=nextatom(A);
+    }
+    while(non_nil_atom(AA)) { setnotprivate(AA); AA=chainatom(AA); }
+}
+
+GLOBAL void DOPRIVATE(void)
+{ while(name(A0)==CONS_2)
+    { PRIVATE(name(arg1(A0))); A0=arg2(A0); }
+  if(name(A0) !=NIL_0) PRIVATE(name(A0));
+}
+
+GLOBAL void DOHIDE(void)
+{ 
+  while(name(A0)==CONS_2)
+    { HIDE(name(arg1(A0))); A0=arg2(A0); }
+  if(name(A0) !=NIL_0) HIDE(name(A0));
+}
+
+/* A Prolog list of the characters of s: cf. 'atom'. */
+GLOBAL TERM LISTREP (register string S)
+{ register TERM  X;
+  register int  N, LENGTH;
+  LENGTH=0;
+  while(S[LENGTH]) LENGTH++;
+  if(LENGTH==0) return mkatom(NIL_0);
+  X=mk2sons(INTT,(TERM)S[N=LENGTH-1],NIL_0,nil_term);
+  while(--N >=0)
+      X=mk2sons(INTT,(TERM)S[N],CONS_2,X);
+  return mkfunc(CONS_2,X);
+}
+
+#define nextchain(A) (first(A) ?  nextatom(A) : nextatom(nextatom(A)))
+GLOBAL ATOM GetAtom(register ATOM A)
+{
+    register int count;
+  start:;
+    if(A==nil_atom) count=0;
+    else if(chainatom(A)) {A=chainatom(A); goto found;}
+    else if(nextchain(A)) 
+        {A=  nextchain(A);goto found;}
+    else count=idhash(A)+1;
+    while(count < HASHSIZE && HASHTAB[count]==nil_atom) count++;
+    if(count < HASHSIZE) A=HASHTAB[count]; 
+    else A=nil_atom;
+  found:;
+    if(non_nil_atom(A) && ( private(A) || hide(A))) 
+      goto start;
+    return A;
+}
+
+
+/************ I N I T I A L I S A T I O N ***************/
+
+#define sysflag 0x4000
+
+LOCAL struct { ATOM macro;
+  string str;
+  char predtype;
+  char optype;
+  PREC_TYPE  prec;
+       } 
+       
+InitT[] 
+={
+#if LONGARITH
+    { LONGT       , "<<LONG>>"  , NORMP   , NONO , LONGSIZE       },
+#endif
+#if REALARITH 
+    { REALT       , "<<REAL>>"  , NORMP   , NONO , REALSIZE       },
+#endif
+    { READ_1      , "read"      , EVALP   , NONO , 1    |sysflag  },
+    { READ_2      , "read"      , EVALP   , NONO , 2    |sysflag  },
+    { WRITE_1     , "write"     , EVALP   , NONO , 1    |sysflag  },
+    { WRITEQ_1    , "writeq"    , EVALP   , NONO , 1    |sysflag  },
+    { DISPLAY_1   , "display"   , EVALP   , NONO , 1    |sysflag  },
+    { GET0_1      , "get0"      , EVALP   , NONO , 1    |sysflag  },
+    { UNGET_0     , "unget"     , EVALP   , NONO , 0    |sysflag  },
+    { GET_1       , "get"       , EVALP   , NONO , 1    |sysflag  },
+    { SKIP_1      , "skip"      , EVALP   , NONO , 1    |sysflag  },
+    { ASK_1       , "ask"       , EVALP   , NONO , 1    |sysflag  },
+    { PUT_1       , "put"       , EVALP   , NONO , 1    |sysflag  },
+    { CLS_0       , "cls"       , EVALP   , NONO , 0    |sysflag  },
+    { GOTOXY_2    , "gotoxy"    , EVALP   , NONO , 2    |sysflag  },
+    { EOLN_0      , "eoln"      , EVALP   , NONO , 0    |sysflag  },
+    { EOF_0       , "eof"       , EVALP   , NONO , 0    |sysflag  },
+    { NL_0        , "nl"        , EVALP   , NONO , 0    |sysflag  },
+    { TAB_1       , "tab"       , EVALP   , NONO , 1    |sysflag  },
+    { FILEE_0     , "fileerrors", EVALP   , NONO , 0    |sysflag  },
+    { FILEE_1     , "fileerrors", EVALP   , NONO , 1    |sysflag  },
+    { NFILEE_0    , "nofileerrors",EVALP  , NONO , 0    |sysflag  },
+#ifdef ARCHY
+    { SYNCLOSE_0  , "syneclose",  EVALP   , NONO , 0    |sysflag  }, 
+    { NSYNCLOSE_0 , "nosyneclose",EVALP   , NONO , 0    |sysflag  },
+#endif
+    { SEE_1       , "see"       , EVALP   , NONO , 1    |sysflag  },
+    { SEEING_1    , "seeing"    , EVALP   , NONO , 1    |sysflag  },
+    { SEEN_0      , "seen"      , EVALP   , NONO , 0    |sysflag  },
+    { TELL_1      , "tell"      , EVALP   , NONO , 1    |sysflag  },
+    { TELLING_1   , "telling"   , EVALP   , NONO , 1    |sysflag  },
+    { TOLD_0      , "told"      , EVALP   , NONO , 0    |sysflag  },
+    { OPEN_1      , "open"      , EVALP   , NONO , 1    |sysflag  },
+    { CLOSE_1     , "close"     , EVALP   , NONO , 1    |sysflag  },
+    { SEEK_2       , "seek"      , EVALP   , NONO , 2    |sysflag  },
+
+    { TTYGET_1     , "ttyget"    , EVALP   , NONO , 1    |sysflag  },
+    { TTYPUT_1     , "ttyput"    , EVALP   , NONO , 1    |sysflag  },
+    { TTYGET0_1    , "ttyget0"   , EVALP   , NONO , 1    |sysflag  },
+    { TTYREAD_1    , "ttyread"   , EVALP   , NONO , 1    |sysflag  },
+    { TTYWRITE_1  , "ttywrite"   , EVALP   , NONO , 1    |sysflag  },
+    { TTYSKIP_1    , "ttyskip"   , EVALP   , NONO , 1    |sysflag  },
+    { TTYCLS_0     , "ttycls"    , EVALP   , NONO , 0    |sysflag  },
+    { TTYGOTOXY_2 , "ttygotoxy"  , EVALP   , NONO , 2    |sysflag  },
+    { TTYTAB_1     , "ttytab"    , EVALP   , NONO , 1    |sysflag  },
+    { TTYASK_1     , "ttyask"    , EVALP   , NONO , 1    |sysflag  },
+    { TTYNL_0      , "ttynl"     , EVALP   , NONO , 0    |sysflag  },
+
+    { FNAME_2     , "$file"      , NORMP  , NONO , 2     |sysflag  },
+    { FASSIGN_2   , "assign"     , EVALP  , NONO , 2     |sysflag  },
+    { aWINDOW_0   , "window"     , EVALP  , NONO , 0     |sysflag  },
+    { WGET0_1     , "wget0"      , EVALP  , NONO , 1     |sysflag  },
+
+#if WINDOWS
+    { BLINK_0     , "blink"      , NORMP  , NONO , 0               },
+    { REVERSE_0   , "reverse"    , NORMP  , NONO , 0               },
+    { BOLD_0      , "bold"       , NORMP  , NONO , 0               },
+    { UNDER_0     , "underline"  , NORMP  , NONO , 0               },
+    { WINDOW_6    , "window"     , NORMP  , NONO , 6               },
+#endif
+ 
+
+    { TRACE_0     , "trace"     , EVALP   , NONO , 0    |sysflag  },
+    { TRACE_1     , "trace"     , EVALP   , NONO , 1    |sysflag  },
+    { NOTRACE_0   , "notrace"   , EVALP   , NONO , 0    |sysflag  },
+    { ECHO_1      , "echo"      , EVALP   , NONO , 1    |sysflag  },
+    { WARN_1      , "warn"      , EVALP   , NONO , 1    |sysflag  },
+    { DEBUG_1     , "$debug"    , EVALP   , NONO , 1    |sysflag  },
+    { OCHECK_1    , "ocheck"    , EVALP   , NONO , 1    |sysflag  },
+    { SPY_1       , "spy"       , EVALP   , NONO , 1    |sysflag  },
+    { NOSPY_1     , "nospy"     , EVALP   , NONO , 1    |sysflag  },
+    { SYSMODE_1   , "sysmode"   , EVALP   , NONO , 1    |sysflag  },
+    { aINTERRUPT_1, "interrupt" , EVALP   , NONO , 1    |sysflag  },
+    { REDUCE_1    , "reducing"  , EVALP   , NONO , 1    |sysflag  },
+
+    { ATOM_1      , "atom"      , ISATOMP , NONO , 1    |sysflag  },
+    { CURATOM_1   , "current_atom",BTEVALP, NONO , 1    |sysflag  },
+    { CUROP_3     , "current_op", BTEVALP , NONO , 3    |sysflag  },
+    { CURPRED_1   , "current_predicate",BTEVALP,NONO,1    |sysflag  },
+    { INTEGER_1   , "integer"   , ISINTEGERP,NONO, 1    |sysflag  },
+    { NUMBER_1    , "number"    , EVALP   , NONO , 1    |sysflag  },
+    { ATOMIC_1    , "atomic"    , EVALP   , NONO , 1    |sysflag  },
+    { LIST_1      , "list"      , EVALP   , NONO , 1    |sysflag  },
+    { MEMBER_2    , "member"    , BTEVALP , NONO , 2    |sysflag  },
+    { IS_MEMBER_2 , "memberchk" , ISMEMBP , NONO , 2    |sysflag  },
+    { NO_MEMBER_2 , "nonmember" , NOMEMBP , NONO , 2    |sysflag  },
+    { APP_3       , "sysappend" , EVALP   , NONO , 3    |sysflag  },
+    { COMPOUND_1  , "compound"  , EVALP   , NONO , 1    |sysflag  },
+    { STRING_1    , "string"    , EVALP   , NONO , 1    |sysflag  },
+    { VAR_1       , "var"       , ISVARP  , NONO , 1    |sysflag  },
+    { NONVAR_1    , "nonvar"    , EVALP   , NONO , 1    |sysflag  },
+    { INVAR_1     , "invar"     , EVALP   , NONO , 1    |sysflag  },
+    { GROUND_1    , "ground"    , EVALP   , NONO , 1    |sysflag  },
+    { FUNCTOR_3   , "functor"   , EVALP   , NONO , 3    |sysflag  },
+    { ARG_3       , "arg"       , EVALP   , NONO , 3    |sysflag  },
+    { NAME_2      , "name"      , EVALP   , NONO , 2    |sysflag  },
+    { UNIV_2      , "=.."       , EVALP   , XFXO , 700  |sysflag  },
+
+    { DBREF_1     , "_db_ref"   , NORMP   , NONO , 1              },
+    { ASSERT_1    , "assert"    , EVALP   , NONO , 1    |sysflag  },
+    { ASSERTA_1   , "asserta"   , EVALP   , NONO , 1    |sysflag  },
+    { ASSERTZ_1   , "assertz"   , EVALP   , NONO , 1    |sysflag  },
+    { DBASS_2     , "assert"    , EVALP   , NONO , 2    |sysflag  },
+    { DBASSA_2    , "asserta"   , EVALP   , NONO , 2    |sysflag  },
+    { DBASSZ_2    , "assertz"   , EVALP   , NONO , 2    |sysflag  },
+    { DBASS_3     , "assert"    , EVALP   , NONO , 3    |sysflag  },
+    { RETRACT_1   , "retract"   , BTEVALP , NONO , 1    |sysflag  },
+    { DBRET_2     , "retract"   , BTEVALP , NONO , 2    |sysflag  },
+    { RETALL_1    , "retractall", EVALP   , NONO , 1    |sysflag  },
+    { ABOL_1       , "abolish"   , EVALP   , NONO , 1    |sysflag  },
+    { ABOL_2      , "abolish"   , EVALP   , NONO , 2    |sysflag  },
+    { CLAUSE_2    , "clause"    , BTEVALP , NONO , 2    |sysflag  },
+    { CLAUSE_3    , "clause"    , BTEVALP , NONO , 3    |sysflag  },
+    { CONSULT_1   , "consult"   , EVALP   , NONO , 1    |sysflag  },
+    { RECONSULT_1 , "reconsult" , EVALP   , NONO , 1    |sysflag  },
+    { LISTALL_0  ,  "listing"   , EVALP   , NONO , 0    |sysflag  },
+    { LISTING_1   , "listing"   , EVALP   , NONO , 1    |sysflag  },
+
+    { CUT_0       , "!"         , CUTP    , NONO , 0    |sysflag  },
+    { FAIL_0      , "fail"      , FAILP   , NONO , 0    |sysflag  },
+    { TRUE_0      , "true"      , NORMP   , NONO , 0    |sysflag  },
+    { REPEAT_0    , "repeat"    , NORMP   , NONO , 0    |sysflag  },
+    { END_0       , "end_of_file", EVALP   , NONO , 0    |sysflag  },
+    { HALT_0      , "halt"      , EVALP   , NONO , 0    |sysflag  },
+    { EXIT_1      , "exit"      , EVALP   , NONO , 1    |sysflag  },
+    { ABORT_0     , "abort"     , EVALP   , NONO , 0    |sysflag  },
+    { RESTART_0   , "restart"   , EVALP   , NONO , 0    |sysflag  },
+    { CALL_1      , "call"      , NORMP   , NONO , 1    |sysflag  },
+    { MAIN_0      , "$main"     , NORMP   , NONO , 0              },
+    { SAVE_1      , "save"      , EVALP   , NONO , 1    |sysflag  },
+
+    { IS_2        , "is"        , EVALP   , XFXO , 700  |sysflag  },
+#if ASSIGN
+    { ASSIGN_2    , "##:="        , NORMP   , XFYO , 700  |sysflag  },
+#endif
+    { LT_2        , "<"         , NORMP   , XFXO , 700  |sysflag  },
+    { LE_2        , "=<"        , NORMP   , XFXO , 700  |sysflag  },
+    { GT_2        , ">"         , NORMP   , XFXO , 700  |sysflag  },
+    { GE_2        , ">="        , NORMP   , XFXO , 700  |sysflag  },
+
+    { EQ_2        , "=:="       , NORMP   , XFXO , 700  |sysflag  },
+    { NE_2        , "=\\="      , NORMP   , XFXO , 700  |sysflag  },
+
+    { PLUS_2      , "+"         , NORMP   , YFXO , 500            },
+    { MINUS_2     , "-"         , NORMP   , YFXO , 500            },
+    { TIMES_2     , "*"         , NORMP   , YFXO , 400            },
+    { DIVIDE_2    , "/"         , NORMP   , YFXO , 400            },
+    { MOD_2       , "mod"       , NORMP   , YFXO , 400            },
+    { MINUS_1     , "-"         , NORMP   , FYO  , 300            },
+
+    { NIL_0       , "[]"        , NORMP   , NONO , 0    |sysflag  },
+    { CONS_2      , "."         , NORMP   , XFYO , 300  |sysflag  },
+    { CURLY_0     , "{}"        , NORMP   , NONO , 0    |sysflag  },
+    { CURLY_1     , "{}"        , NORMP   , NONO , 1    |sysflag  },
+    { ARROW_2     , ":-"        , EVALP   , XFXO , 1200 |sysflag  },
+    { ARROW_1     , ":-"        , NORMP   , FXO  , 1200 |sysflag  },
+    { QUESTION_1  , "?-"        , NORMP   , FXO  , 1200 |sysflag  },
+    { SEMI_2      , ";"         , NORMP   , XFYO , 1100 |sysflag  },
+    { IMPL_2      , "->"        , NORMP   , XFYO , 1050 |sysflag  },
+    { COMMA_2     , ","         , NORMP   , XFYO , 1000 |sysflag  },
+    { NOT_1       , "not"       , NORMP   , FYO  , 800  |sysflag  },
+    { NOT1_1      , "\\+"       , NORMP   , FYO  , 800  |sysflag  },
+    { ISEQ_2      , "="         , NORMP   , XFXO , 700  |sysflag  },
+    { ISNEQ_2     , "\\="       , NORMP   , XFXO , 700  |sysflag  },
+    { EQUAL_2     , "=="        , EVALP   , XFXO , 700  |sysflag  },
+    { NOEQUAL_2   , "\\=="      , EVALP   , XFXO , 700  |sysflag  },
+    { TOP_0       , "toplevel"  , NORMP   , NONO , 0              },
+    { INIT_0      , "initialize", NORMP   , NONO , 0              },
+    { PROMPT_0    , "prompt"    , NORMP   , NONO , 0              },
+    { INTERRUPT_0 , "interrupt" , NORMP   , NONO , 0              },
+    { ERROR_2     , "error"     , NORMP   , NONO , 2              },
+    { UNKNOWN_1   , "unknown"   , NORMP   , NONO , 1              }, 
+
+    { STDIN_0     , "stdin"     , NORMP   , NONO , 0              },
+    { STDOUT_0    , "stdout"    , NORMP   , NONO , 0              },
+    { STDERR_0    , "stderr"    , NORMP   , NONO , 0              },
+    { STDTRACE_0  , "stdtrace"  , NORMP   , NONO , 0              },
+#if HELP
+    { STDHELP_0   , "stdhelp"   , NORMP   , NONO , 0              },
+#endif
+    { ON_0        , "on"        , NORMP   , NONO , 0              },
+    { OFF_0       , "off"       , NORMP   , NONO , 0              },
+    { ALL_0       , "all"       , NORMP   , NONO , 0              },
+    { USER_0      , "user"      , NORMP   , NONO , 0              },
+    { NULL_0      , "null"      , NORMP   , NONO , 0              },
+    { FX_0        , "fx"        , NORMP   , NONO , 0              },
+    { FY_0        , "fy"        , NORMP   , NONO , 0              },
+    { XF_0        , "xf"        , NORMP   , NONO , 0              },
+    { YF_0        , "yf"        , NORMP   , NONO , 0              },
+    { XFX_0       , "xfx"       , NORMP   , NONO , 0              },
+    { XFY_0       , "xfy"       , NORMP   , NONO , 0              },
+    { YFX_0       , "yfx"       , NORMP   , NONO , 0              },
+    { CALL_0      , "call"      , NORMP   , NONO , 0              },
+    { PROVED_0    , "proved"    , NORMP   , NONO , 0              },
+    { REDO_0      , "redo"      , NORMP   , NONO , 0              },
+    { FAILED_0    , "failed"    , NORMP   , NONO , 0              },
+
+    { STATS_0     , "stats"     , EVALP   , NONO , 0    |sysflag  },
+    { OP_3        , "op"        , EVALP   , NONO , 3    |sysflag  },
+    { DICT_1      , "dict"      , EVALP   , NONO , 1    |sysflag  },
+    { SDICT_1     , "sdict"     , EVALP   , NONO , 1    |sysflag  },
+    { SYS_1       , "sys"       , EVALP   , NONO , 1    |sysflag  },
+    { SORT_2      , "sort1"      , EVALP   , NONO , 2    |sysflag  },
+    { SORT0_2     , "sort"     , EVALP   , NONO , 2    |sysflag  },
+
+    { EVALUATE_2  , "$evaluate"  , ARITHP  , NONO , 2    |sysflag  },
+    { DASSIGN_2    , "$dass"     , EVALP   , NONO , 2    |sysflag  },
+    { REDUCE_2     , "$reduce"    , EVALP   , NONO , 2    |sysflag  },
+    { ACOMP_1     , "$acomp"     , EVALP   , NONO , 1    |sysflag  },
+
+    { MAXINT_0    , "maxint"    , NORMP   , NONO , 0               },
+    { MININT_0    , "minint"    , NORMP   , NONO , 0               },
+    { MAXAR_0     , "maxarity"  , NORMP   , NONO , 0		   },
+    { MAXDEP_0    , "maxdepth"  , NORMP   , NONO , 0		   },
+#if REALARITH
+    { E_0          , "e"         , NORMP   , NONO , 0              },
+    { PI_0         , "pi"        , NORMP   , NONO , 0              }, 
+    { REAL_1       , "real"      , EVALP   , NONO , 1              },
+    { EXP_1        , "exp"       , NORMP   , NONO , 1              },
+    { LN_1         , "ln"        , NORMP   , NONO , 1              },
+    { LOG10_1      , "log10"     , NORMP   , NONO , 1              },
+    { SQRT_1       , "sqrt"      , NORMP   , NONO , 1              },
+    { SIN_1        , "sin"       , NORMP   , NONO , 1              },
+    { COS_1        , "cos"       , NORMP   , NONO , 1              },
+    { TAN_1        , "tan"       , NORMP   , NONO , 1              },
+    { ASIN_1       , "asin"      , NORMP   , NONO , 1              },
+    { ACOS_1       , "acos"      , NORMP   , NONO , 1              },
+    { ATAN_1       , "atan"      , NORMP   , NONO , 1              },
+    { FLOOR_1      , "floor"     , NORMP   , NONO , 1              },
+    { CEIL_1       , "ceil"      , NORMP   , NONO , 1              },
+    { POWER_2      , "**"        , NORMP   , XFYO , 350            },
+    { ENTIER_1    , "entier"    , NORMP   , NONO , 1              },
+#endif
+    { LSHIFT_2    , "<<"        , NORMP   , XFYO , 600            },
+    { RSHIFT_2    , ">>"        , NORMP   , XFYO , 600            },
+    { BITAND_2    , "&"         , NORMP   , XFYO , 650            },
+    { BITOR_2     , "\\"        , NORMP   , XFYO , 650            },
+    { AND_2        , "&&"        , NORMP   , XFYO , 650            },
+    { OR_2         , "\\\\"      , NORMP   , XFYO , 650            },
+    { NEG_1        , "/"         , NORMP   , FYO  , 300            },
+    { BITNEG_1    , "~"          , NORMP   , FYO , 300              },
+    { IDIV_2       , "//"        , NORMP   , YFXO , 400            },
+    { ALT_2        , "@<"        , EVALP   , XFXO , 700  |sysflag  },
+    { ALE_2        , "@=<"       , EVALP   , XFXO , 700  |sysflag  },
+    { AGT_2        , "@>"        , EVALP   , XFXO , 700  |sysflag  },
+    { AGE_2        , "@>="       , EVALP   , XFXO , 700  |sysflag  },
+    { AEQ_2        , "@="        , EVALP   , XFXO , 700  |sysflag  },
+    { ANE_2        , "@\\="      , EVALP   , XFXO , 700  |sysflag  },
+    { EVAL_1       , "eval"      , NORMP   , NONO , 1              },
+    { QUOTE_1      , "`"         , NORMP   , FYO  , 650            },
+    { NL_2        , "\n"        , NORMP   , XFYO , 999            },
+    { VERSION_0   , "version"   , EVALP   , NONO , 0   |sysflag   },
+    { PRIVATE_1   , "private"   , EVALP   , NONO , 1   |sysflag   },
+    { HIDE_1      , "hide"      , EVALP   , NONO , 1   |sysflag   },
+    { ENSURE_3    , "ensure"    , EVALP   , NONO , 3   | sysflag  },
+    { ANCESTORS_1 , "ancestors" , EVALP   , NONO , 1   | sysflag  },
+    { GOTO_1      , "$goto"     , GOTOP   , NONO , 1   | sysflag   },
+
+    { OPSYS_1     , "operating_system",EVALP,NONO, 1    |sysflag  },
+    { TIMER_1     , "timer"     , EVALP   , NONO , 1    |sysflag  },
+    { ARGC_1      , "argc"      , EVALP   , NONO , 1    |sysflag  },
+    { ARGV_2      , "argv"      , EVALP   , NONO , 2    |sysflag  },
+
+#if !CPM
+    { TIME_3      , "time"      , EVALP   , NONO , 3    |sysflag  },
+    { DATE_3      , "date"      , EVALP   , NONO , 3    |sysflag  },
+    { WEEKDAY_1   , "weekday"   , EVALP   , NONO , 1    |sysflag  },
+    { GETENV_2    , "getenv"    , EVALP   , NONO , 2   | sysflag  },
+#if !RISCOS
+    { PUTENV_2    , "putenv"    , EVALP   , NONO , 2    |sysflag  },
+#endif
+    { SYSTEM_1    , "system"    , EVALP   , NONO , 1    |sysflag  },
+#endif
+
+#if HELP
+    { HELP_0      , "help"      , EVALP   , NONO , 0   | sysflag  },
+    { HELP_1      , "help"      , EVALP   , NONO , 1   | sysflag  },
+#endif
+
+#if DBASE3
+    { OPENDBF_2   , "opendbf"   , EVALP   , NONO , 2   | sysflag  },
+    { CREATEDBF_2 , "createdbf" , EVALP   , NONO , 2   | sysflag  },
+    { CLOSEDBF_1  , "closedbf"  , EVALP   , NONO , 1   | sysflag  },
+    { READDBF_3   , "readdbf"   , BTEVALP , NONO , 3   | sysflag  },
+    { WRITEDBF_3  , "writedbf"  , EVALP   , NONO , 3   | sysflag  },
+    { SEEKDBF_2   , "seekdbf"   , EVALP   , NONO , 2   | sysflag  },
+    { ERASEDBF_2  , "erasedbf"  , EVALP   , NONO , 2   | sysflag  },
+#endif
+
+#if SYMBOLARITH
+    { COLON_2     , ":"         , NORMP   , XFYO , 600     },
+    { INL_1       , "inl"       , NORMP   , NONO , 1       },
+    { INR_1       , "inr"       , NORMP   , NONO , 1       },
+    { SPREAD_2    , "spread"    , NORMP   , NONO , 2       },
+    { DECIDE_3    , "decide"    , NORMP   , NONO , 3       },
+    { IND_4       , "ind"       , NORMP   , NONO , 4       },
+    { INT_EQ_4    , "int_eq"    , NORMP   , NONO , 4       },
+    { LISTIND_3   , "list_ind"  , NORMP   , NONO , 3       },
+    { LAMBDA_1    , "lambda"    , NORMP   , NONO , 1       },
+    { SUBST_3     , "subst"     , NORMP   , NONO , 3       },
+    { SUBST_4     , "subst"     , EVALP   , NONO , 4       },
+    { RECIND_3    , "rec_ind"   , NORMP   , NONO , 3       },
+    { TILDE_0     , "~"         , NORMP   , NONO , 0       },
+    { OF_2        , "of"        , NORMP   , YFXO , 250     },
+    { SUCC_1      , "s"         , NORMP   , NONO , 1       },
+    { PRED_1      , "p"         , NORMP   , NONO , 1       },
+    { PIND_3      , "p_ind"     , NORMP   , NONO , 3       },
+#endif
+
+#if HACKY
+    { iCHOICEP_1 , "$$choicep"  , EVALP   , NONO , 1 |sysflag},
+    { iHEAPT_1   , "$$heapt"    , EVALP   , NONO , 1 |sysflag},
+    { iSTACKT_1  , "$$stackt"   , EVALP   , NONO , 1 |sysflag},
+    { iAHEAPT_1  , "$$aheapt"   , EVALP   , NONO , 1 |sysflag},
+    { iASTACKT_1 , "$$astackt"  , EVALP   , NONO , 1 |sysflag},
+    { iENV_1     , "$$env"      , EVALP   , NONO , 1 |sysflag},
+    { iTRAIL_1   , "$$trail"    , EVALP   , NONO , 1 |sysflag},
+    { iNROFCALLS_2,"$$nrofcalls", EVALP   , NONO , 2 |sysflag},
+#endif
+
+#if CPM
+    { BDOS_3      , "bdos"      , EVALP   , NONO , 3 |sysflag},
+    { PEEK_3      , "peek"      , EVALP   , NONO , 3 |sysflag},
+    { POKE_2      , "poke"      , EVALP   , NONO , 2 |sysflag},
+#endif
+
+    { 0           , "\0"        , 0       , 0    , 0       }
+ };
+
+
+GLOBAL void InitAtoms(void)
+{ register int I;
+  int Arity,Oprec,Predtype,Optype;
+  string Name;
+  ATOM A; 
+  for(I=0;I<HASHSIZE;I++) HASHTAB[I]=nil_atom; /* ??? */
+  INIT=true;
+  nextatom(MAXATOMS)=MAXSTRINGS;
+  for(I=0;InitT[I].macro;I++)
+    { CONSTATOM=InitT[I].macro;
+      Name=InitT[I].str; 
+      Optype=InitT[I].optype;
+      Predtype=InitT[I].predtype;
+      Oprec=InitT[I].prec & ~sysflag;
+      switch(Optype)
+ { case XFXO: case XFYO : case YFXO : Arity=2; break;
+          case NONO : Arity=Oprec; Oprec=0; break;
+          default: Arity=1; break;
+        }
+      A=LOOKUP(Name,Arity,true);
+      oprec(A)=Oprec; 
+      if(InitT[I].prec & sysflag) setsystem(A);
+      setoclass(A,Optype); setclass(A,Predtype);
+    }
+  INIT=false;
+  nextatom(ATOMSTOP)=(card)STRINGSTOP;
+  setclass(UNBOUNDT,VARP); setsystem(UNBOUNDT);
+  setclass(VART,VARP); setsystem(VART);
+  setclass(SKELT,VARP); setsystem(SKELT);
+  setclass(INTT,VARP); setsystem(INTT);
+}
+
+#if USER
+GLOBAL void InitUAtom(int Phase, int Macro, string Name, int Predtype, 
+                      int Optype, int Oprec, int System)
+{ int Arity;
+  ATOM A; 
+  /* InitUAtom(0,...) is called at the very beginning
+     from  InitUser(0)  and sets  LASTATOM and ATOMHTOP ;
+     InitUAtom(1,...) is called from InitUser(1) after
+     InitAtoms()  and InitDatabase() 
+  */
+  if(Phase==0) 
+     { inc_atom(LASTATOM); inc_atom(ATOMHTOP); return; }
+  INIT=true;
+  CONSTATOM=Macro;
+  STARTATOM();
+  switch(Optype)
+       { case XFXO: case XFYO : case YFXO : Arity=2; break;
+          case NONO : Arity=Oprec; Oprec=0; break;
+          default: Arity=1; break;
+        }
+  A=LOOKUP(Name,Arity,true);
+  oprec(A)=Oprec; 
+  if(System) setsystem(A); 
+  setoclass(A,Optype); setclass(A,Predtype);
+  INIT=false;
+}
+#endif
+
+
+GLOBAL boolean DONAME (void)
+{ 
+  switch(name(A0))
+  {
+        case INTT:  return UNI(A1,LISTREP(itoa(ival(A0))));
+#if LONGARITH
+        case LONGT: return UNI(A1,LISTREP(ltoa(longval(A0))));
+#endif
+#if REALARITH
+        case REALT: return UNI(A1,LISTREP(ftoa(realval(A0))));
+#endif
+        case UNBOUNDT: 
+            {
+                register TERM  X;
+                register int C;
+                STARTATOM();
+                X=A1;
+                while(name(X)==CONS_2)
+                { 
+                    C=INTVALUE(arg1(X));
+                    if(C <=0 || C > 255) ARGERROR();
+                    ATOMCHAR(C);
+                    X=arg2(X);
+                }
+                TESTATOM(NIL_0,X);
+                ATOMCHAR(0);
+                return UNI(A0,mkatom(LOOKUP(NEWATOM,0,false)));
+            }  
+        default: CHECKATOM(A0);
+                 return UNI(A1,LISTREP(tempcopy(name(A0))));
+    }
+}
+
+GLOBAL void DOOP (void)
+{ 
+    PREC_TYPE P;
+    ARITY_TYPE ARITY;
+    ATOM  A;
+    int F,F1,F2; /* OpType */
+    TERM T;
+  
+    if( (P=INTVALUE(A0)) < 0 || P > MAXPREC) ARGERROR();
+    if(name(A2)!=CONS_2) CHECKATOM(A2);
+    switch(A=name(A1))
+    { 
+        case FX_0:   F=FXO ; ARITY=1; break;
+        case FY_0:   F=FYO;  ARITY=1; break; 
+        case XF_0:   F=XFO;  ARITY=1; break;
+        case YF_0:   F=YFO;  ARITY=1; break;
+        case XFX_0:  F=XFXO; ARITY=2; break;
+        case XFY_0:  F=XFYO; ARITY=2; break; 
+        case YFX_0:  F=YFXO; ARITY=2; break; 
+        default:     ARGERROR();
+    }
+    if(P==0) F=NONO;
+    do
+    {
+        if(name(A2)==CONS_2)
+        {
+            T=arg1(A2); A2=arg2(A2);
+            if(name(A2)==NIL_0) A2=nil_term;
+        }
+        else 
+        {
+            T=A2; A2=nil_term;
+        }
+        CHECKATOM(T);
+        F1=oclass(LOOKATOM(name(T),-1));
+        F2=oclass(LOOKATOM(name(T),-2));
+        /* A must be copy to heap, because some infos are global */
+        A=copyatom( LOOKATOM(name(T),ARITY) );
+        if(system(A) && !aSYSMODE) ERROR(SYSPROCE);
+        if(WARNFLAG && P)
+        {
+          if(oclass(A) !=NONO)
+          { ws("WARNING: redeclaration of operator ");
+            wq(A);ws("/"); wi(ARITY);ws("\n");
+          }
+          if( /* infix-postfix-conflict */ 
+             ((F==XFXO || F==XFYO || F==YFXO)&&(F1==FXO || F1==FYO)) ||
+             ((F==XFO || F==YFO)&&(F2==XFXO || F2==XFYO || F2==YFXO)))
+          { ws("WARNING: possibly conflicting infix/postfix ");
+            ws("declaration for "); wq(A); ws("\n");
+          }
+        }
+        setoclass(A,(int)F); oprec(A)=P;
+    } while(A2 !=nil_term);
+}
+
+

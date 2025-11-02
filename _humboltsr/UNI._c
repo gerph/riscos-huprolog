@@ -1,0 +1,493 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     ** 
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+#include "systems.h"
+#include "types.h"
+#include "errors.h"
+#include "atoms.h"
+#include "manager.h"
+
+/* 
+
+When backtracking occurs, it is necessary to undo the variable bindings
+introduced during execution of the failed clauses.  For this purpose,
+certain critical bindings are recorded on an auxiliary stack called the
+trail.  The critical bindings are those involving variables created in
+environments older than choicepoint: those newer than choicepoint will
+disappear when the stacks contract.
+
+*/
+
+#if P8000
+#define reg1 register
+#define reg2 register
+#define reg3 register
+#define reg4 register
+#define reg5 register
+#define reg6 register
+#endif
+
+#if RISCOS
+#define reg1 register
+#define reg2 register
+#define reg3 register
+#define reg4 register
+#endif
+
+
+#if MSC 
+#define reg1 register
+#define reg2 register
+#endif
+
+#ifndef reg1
+#define reg1 
+#endif
+#ifndef reg2
+#define reg2 
+#endif
+#ifndef reg3
+#define reg3 
+#endif
+#ifndef reg4
+#define reg4 
+#endif
+#ifndef reg5
+#define reg5 
+#endif
+#ifndef reg6
+#define reg6 
+#endif
+#ifndef reg7
+#define reg7
+#endif
+#ifndef reg8
+#define reg8
+#endif
+#ifndef reg9
+#define reg9
+#endif
+#ifndef reg10
+#define reg10
+#endif
+#ifndef reg11
+#define reg11
+#endif
+#ifndef reg12
+#define reg12
+#endif
+
+/*
+EXPORT   boolean UNIFY();
+EXPORT   boolean INTRES(), LONGRES();
+EXPORT  void KILLSTACKS();
+EXPORT   ENV NEWENV(int);
+EXPORT   ENV ENVTOP;
+EXPORT  TRAIL TRAILEND;
+EXPORT TERM DEREF();
+*/
+
+IMPORT TERM HEAPTOP; /* from manager.c */
+IMPORT ATOM ATOMSTOP; /* from manager.c */
+IMPORT STRING STRINGSTOP;
+IMPORT TERM GLOTOP;
+IMPORT ENV CHOICEPOINT;
+IMPORT boolean OCHECK;
+IMPORT void ABORT();      /* from io.c */
+IMPORT void reclaim_heap();
+FORWARD boolean UNIFY();
+
+#if !INLINE
+GLOBAL TERM DEREF(register TERM x, register TERM b)
+{ if(name(x)==UNBOUNDT) 
+    { if(is_heapterm(x)) return mkfreevar(); }
+  else
+    { if(name(x)==SKELT) x=b+offset(x); 
+      while(name(x)==VART) x=val(x); 
+    }
+  return x;
+}
+#endif
+
+
+#if !POINTEROFFSET
+GLOBAL TRAIL TRAILEND=trail_units(1);
+GLOBAL TRAIL BASETRAIL=trail_units(1);
+#define ENDTRAILER MAXTRAILER
+#endif
+
+#if POINTEROFFSET
+#ifdef DYNMEM
+GLOBAL TRAIL TRAILEND;
+GLOBAL TRAIL BASETRAIL;
+GLOBAL TRAIL ENDTRAILER;
+#else
+GLOBAL TRAIL TRAILEND= &TRAILTAB[1];
+GLOBAL TRAIL BASETRAIL= &TRAILTAB[1];
+GLOBAL TRAIL ENDTRAILER= &TRAILTAB[MAXTRAILER];
+#endif
+#endif
+
+GLOBAL ENV   ENVTOP=env_units(1);
+GLOBAL ENV   BASEENV=env_units(1);
+
+
+/*
+   Specialized unification algorithm for returning integer results.
+   IntResult(x, i) is equivalent to Unify(x, MakeInt(i), ee, 0, 0)
+   but avoids allocating a global node.
+*/
+
+GLOBAL boolean INTRES (register TERM X, register int I)
+{ 
+  deref(X);
+  if(name(X)==INTT) return ival(X)==I;
+  if(name(X)==UNBOUNDT)
+     { name(X)=INTT; ival(X)=I; 
+       if(X<base(CHOICEPOINT)) 
+          { if(TRAILEND >=ENDTRAILER) ABORT(TRAILSPACEE);
+            boundvar(TRAILEND)=X; 
+            inc_trail(TRAILEND); }
+       return true; 
+     }
+  return false;
+}
+
+
+#if LONGARITH
+GLOBAL boolean LONGRES(TERM T, long L)
+{
+   if(minint<=L && L<=maxint)
+     return INTRES(T,(int)L);
+   else return UNI(T,mklong(L));
+}
+#endif
+/*
+
+The abstract Prolog machine contains two stacks, the local stack and
+the global stack.  The local stack is held in the global array
+'display', with local variables in the global array 'locstack'.  These
+arrays have stack pointers 'envtop' and 'loctop' respectively.  The
+global stack is held as a chain of nodes starting at 'glotop'.
+
+*/
+
+/* Create a new environment e. */
+
+/*
+   Do not alterate Newenv
+   Newenv is used in execute as inline-code
+ */
+GLOBAL ENV NEWENV (REGISTER int VAR_SIZES)
+{ register ENV EP; register TERM T;
+  if((EP=ENVTOP)>=MAXENVS) ABORT(FRAMESPACEE);
+  inc_env(ENVTOP);
+  choice(EP)=CHOICEPOINT;
+  trail(EP)=TRAILEND;
+  atomtop(EP)=ATOMSTOP;
+  base(EP)=T=GLOTOP;
+  if((GLOTOP+=(unsigned)VAR_SIZES) >=HEAPTOP) reclaim_heap(true);
+  while(dec_term(VAR_SIZES)>=0)
+    { name(T)=UNBOUNDT; inc_term(T); } 
+  return EP;
+}
+
+
+/*
+   Dispose of all environments after newtop, together with all
+   associated global storage, and undo critical variable bindings.
+   Do not alterate Killstacks
+   Killstacks is used in execute as inline-code
+ */
+GLOBAL void KILLSTACKS (register ENV N)
+{ if(ENVTOP>=N)
+    { register TRAIL  Q,QQ; 
+      CHOICEPOINT=choice(N);
+      ATOMSTOP=atomtop(N);
+      STRINGSTOP= (STRING)nextatom(ATOMSTOP);
+      GLOTOP=base(N);
+      ENVTOP=N;
+      Q=TRAILEND; TRAILEND=QQ=trail(N);
+      while(QQ<Q) 
+        { name(boundvar(QQ))=UNBOUNDT; inc_trail(QQ); }
+    }
+}
+
+/* 
+Unify implements the unification algorithm, which finds the most
+general common instance of a pair of terms. It performs the matching
+substitution by introducing variable bindings.  The occur check
+is executed only if the corresponding flag is set.
+*/
+
+#if OCCUR_CHECK
+LOCAL boolean O_Check(reg3 int N, reg5 TERM V, reg4 TERM T, 
+                      reg6 TERM BT, int DEPTH)
+{ /* returns true, if V is an element of T */
+  reg1 TERM S=T; 
+  reg2 ATOM A;
+  if(N==0) return false;
+  if(DEPTH==0)ABORT(DEPTHE);
+  for(;;)
+  {  
+    if(name(S)==SKELT) S=BT+offset(S); 
+    while(name(S)==VART) S=val(S);
+    if(name(S)==UNBOUNDT) return (S==V);
+    if(O_Check(arity(name(S)),V,son(S),BT,DEPTH-1)) return true; 
+    if(--N==0) break;
+    S=next_br(T);
+  } 
+  return false;
+}
+#endif
+
+
+/* 
+   BIND creates a copy of the given argument list X on the stack
+   N - length of argument list;
+   X - pointer to first argument (X is assumed to be on heap);
+   B - base of the current environment for X;
+*/
+
+#define bindspace(N) \
+               { if((GLOTOP+=term_units(N))>=HEAPTOP) reclaim_heap(true); }
+
+LOCAL TERM BIND( reg6 int N, reg2 TERM X, reg4 TERM B)
+{
+  reg2 TERM Y;
+  reg4 TERM T;
+  T=Y=GLOTOP;
+bind_top:
+  bindspace(N);
+
+  for(;;)
+    if(name(X)==SKELT) 
+    { reg6 TERM S;
+      S=B+offset(X);
+      while(name(S)==VART) S=val(S); 
+      name(Y)=VART; val(Y)=S;
+      if(--N==0)goto ret;
+      next_br(X);next_br(Y);continue;
+    }
+    else 
+    { reg6 int S;
+      if(S=arity(name(Y)=name(X)))
+        { if(--N !=0) son(Y)=BIND(S,son(X),B);
+          else { N=S;Y=son(Y)=GLOTOP; X=son(X); goto bind_top; }
+          next_br(Y);next_br(X); continue;
+        }
+      else val(Y)=val(X);
+      if(--N==0)goto ret;
+      next_br(X);next_br(Y);continue;
+    }
+ ret: return T;
+}
+
+/* Unify x1 and x2.  Perform the matching substitution
+   by binding variables. */
+#if ! INLINE
+GLOBAL boolean UNI(TERM Y1, TERM Y2)
+{ return UNIFY(1,Y1,Y2,BE,BE,MAXDEPTH); }
+#endif
+
+
+
+GLOBAL boolean UNIFY (int N, TERM Y1, TERM Y2, TERM B1, TERM B2, 
+                      int DEPTH)
+{ reg1 TERM X1=Y1; reg2 TERM X2=Y2; 
+  reg4 ATOM A1; reg3 ATOM A2; reg5 TERM BC; 
+  TERM TOP; TRAIL TEND; card TAILRECUR=DEPTH; 
+
+#define trailing(v,h)        {if(v<BC) { boundvar(TRAILEND)=v;\
+              if(inc_trail(TRAILEND)>=ENDTRAILER) ABORT(TRAILSPACEE);}}
+#define dereferencing(x,b) {if(name(x)==SKELT) x=b+offset(x);\
+                      while(name(x)==VART) x=val(x);}
+#define varbind(x,y)       { if(x<y)\
+        {name(y)=VART; val(y)=x; trailing(y,A1); }\
+        else { if(heap_term(x)) goto nextbrother;\
+          else if(x>y) {name(x)=VART;val(x)=y; trailing(x,A1);}}}
+#undef  annontvar
+#define annontvar          heap_term
+#if OCCUR_CHECK
+#define occurcheck(ar,v,t,b){if(OCHECK && \
+                      O_Check(ar,v,son(t),b,MAXDEPTH))goto failure;}
+#define occur1check(n,v,t,b){if(OCHECK && arity(n))\
+                 if(O_Check(arity(n),v,son(t),b,MAXDEPTH))goto failure;}
+#endif
+#if !OCCUR_CHECK
+#define occurcheck(ar,v,t,b)
+#define occur1check(n,v,t,b)
+#endif
+#define heap_term(x)  (x>GLOTOP)
+#define stack_term(x) (x<=GLOTOP)
+
+  if(DEPTH==0) ABORT(DEPTHE);
+  TEND=TRAILEND;
+  TOP=GLOTOP;
+  BC=base(CHOICEPOINT); 
+deref_top:   
+  for(;;)
+    { A2=name(X2);
+      
+      if(A2>FUNCNAME)
+        { dereferencing(X1,B1); 
+          if((A1=name(X1))!=A2) 
+            { if(A1==UNBOUNDT) 
+                { if(annontvar(X1)) goto nextbrother;
+                  trailing(X1,A1); 
+                  if(A1=arity(A2)) goto func3; 
+                  name(X1)=A2;son(X1)=nil_term;goto nextbrother;}
+              goto failure;
+            }
+          if(A1=arity(A2)) goto func4;
+          goto nextbrother;
+        } 
+      if(A2==SKELT)
+        { X2=B2+offset(X2); 
+          if((A2=name(X2))==UNBOUNDT) goto unboundt2;
+          else if(A2 !=VART) goto func2;
+          goto vart2;
+        }
+      if(A2==UNBOUNDT) 
+        { if(annontvar(X2)) goto nextbrother; 
+          goto unboundt2;
+        }
+      if(A2==VART) 
+        { vart2: 
+          do X2=val(X2);while(name(X2)==VART);
+          A2=name(X2); 
+        }
+      if(A2==UNBOUNDT) 
+        { unboundt2: dereferencing(X1,B1); 
+          if((A1=name(X1))>FUNCNAME)
+            { trailing(X2,A2);
+              if(stack_term(X1))
+                { occur1check(A1,X2,X1,B1);
+                  name(X2)=A1; son(X2)=son(X1);
+                }
+              else if(A2=arity(A1))
+                { occurcheck((int)A2,X2,X1,B1);
+                  name(X2)=A1; 
+                bind1:
+                  X2=son(X2)=GLOTOP;
+                  X1=son(X1);
+                  bindspace(A2);
+                  for(;;)
+                    { if(name(X1)==SKELT) 
+                        { register TERM X;
+                          X=B1+offset(X1); 
+                          while(name(X)==VART) X=val(X);
+                          name(X2)=VART;val(X2)=X; 
+                          if(--A2==0) break;
+                          next_br(X1); next_br(X2);continue;
+                        }
+                      name(X2)=A1=name(X1); 
+                      if(--A2==0)
+                        { 
+                          if(A1==INTT) { ival(X2)=ival(X1);break;}
+                          if(A2=arity(A1)) goto bind1; 
+                          else son(X2)=nil_term;
+                          break;
+                        }
+                      else
+                        { if(A1=arity(A1))
+                            { son(X2)=BIND((int)A1,son(X1),B1);}
+                          else val(X2)=val(X1);
+                          next_br(X1);next_br(X2);
+                        }
+                    }
+                }
+              else { name(X2)=A1; son(X2)=nil_term; }
+            } 
+          else if(A1!=A2)
+            {name(X2)=A1;ival(X2)=A1=ival(X1);trailing(X2,A2);}
+          else /* A1==UNBOUNDT */
+              varbind(X1,X2)
+        }
+      else 
+        { func2: dereferencing(X1,B1); 
+          if((A1=name(X1))!=A2) 
+            if(A1==UNBOUNDT)
+              { if(annontvar(X1)) goto nextbrother;
+                trailing(X1,A1);
+                if(A1=arity(A2))
+                  { func3: 
+                    occurcheck((int)A1,X1,X2,B2);
+                    name(X1)=A2;
+                    if(X2>GLOTOP)   /* heap_term */
+                      { bind2:
+                        X1=son(X1)=GLOTOP;
+                        X2=son(X2);
+                        bindspace(A1);
+                        for(;;)
+                          { if(name(X2)==SKELT) 
+                              { register TERM X;
+                                X=B2+offset(X2); 
+                                while(name(X)==VART) X=val(X);
+                                name(X1)=VART;val(X1)=X;
+                                if(--A1==0) break;
+                                next_br(X1); next_br(X2);continue;
+                              }
+                            name(X1)=A2=name(X2);
+                            if(A2=arity(A2))
+                              { if(--A1 !=0)
+                                  { son(X1)=BIND((int)A2,son(X2),B2);
+                                    next_br(X1);next_br(X2); 
+                                    continue;
+                                  }
+                                else
+                                  { A1=A2; goto bind2;}
+                              }
+                            val(X1)=val(X2);
+                            if(--A1==0) break;
+                            next_br(X1); next_br(X2);continue;
+                          }
+                      }
+                    else son(X1)=son(X2);
+                  }
+                else  {  name(X1)=A2; val(X1)=val(X2);  }
+              } 
+            else goto failure;
+          else if(A1=arity(A2))
+            {func4:  
+              if(--N==0)
+               { N=A1; Y1=X1=son(X1);Y2=X2=son(X2);
+                 if(++TAILRECUR!=0) goto deref_top;
+                 ABORT(DEPTHE);
+               }        
+              if(!UNIFY((int)A1,son(X1),son(X2),B1,B2,DEPTH-1))
+                      goto failure;
+              X1=next_br(Y1); X2=next_br(Y2); continue;
+            }
+          else 
+            if(val(X1)!=val(X2)) goto failure;
+       }
+nextbrother:     
+    if(--N==0) goto success;
+    X1=next_br(Y1); X2=next_br(Y2);continue;
+  }
+  
+failure:        
+  GLOTOP=TOP; 
+  while(TEND<TRAILEND)
+   { X1=boundvar(dec_trail(TRAILEND)); name(X1)=UNBOUNDT;}
+  return false;
+
+success: 
+  return true;
+}
+
+

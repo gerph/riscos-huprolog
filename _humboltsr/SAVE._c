@@ -1,0 +1,444 @@
+
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     **
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+/*
+** save(filename) generates a File which could be used
+** instead of init.c in the synthesis of a new prolog system
+*/
+
+#include "systems.h"
+#include "atoms.h"
+#include "types.h"
+#include "files.h"
+
+#if INITFILE
+#include <stdio.h>
+
+IMPORT string RESTORESTATE;
+FILE *inifile;
+
+void inierror(char *m)
+{
+    fprintf( stderr, "\nError in restore while: %s\n", m );
+    exit(1);
+}
+
+#endif
+
+
+IMPORT TERM A0;
+IMPORT boolean DOTELL();
+
+LOCAL int ENCODE_TERM(TERM T)
+{
+  IMPORT TERM LASTTERM;
+  if (T==nil_term || T==0) return 0;
+#if POINTEROFFSET
+  return ((int)LASTTERM-(int)T)/sizeof(TERMNODE)+1;
+#endif
+#if WORDOFFSET
+  return (int)LASTTERM-(int)T;
+#endif
+}
+
+LOCAL TERM DECODE_TERM(int N)
+{ IMPORT TERM LASTTERM;
+  if (N==0) return nil_term;
+#if POINTEROFFSET
+  return (TERM)((int)LASTTERM-(N-1)*sizeof(TERMNODE));
+#endif
+#if WORDOFFSET
+   return (TERM)((int)LASTTERM-(N-1));
+#endif
+}
+
+/******************************/
+/*                            */
+/*  STRINGTAB                 */
+/*                            */
+/******************************/
+
+IMPORT STRING BASESTRING,STRINGHTOP;
+IMPORT char st[];
+IMPORT int strhtop;
+
+LOCAL void SAVE_STRINGTAB(void)
+{ STRING I; int CH;
+#if INITFILE
+    ws( "STRINGHTOP " ); wi(STRINGHTOP); ws("\n");
+  for (I=BASESTRING;I<=STRINGHTOP;I++) 
+    { CH=repchar(I);  ws(" "); wi(CH);if (CH==0) ws("\n"); }
+#else
+  ws("\nchar st[]=\n{ ");
+  for (I=BASESTRING;I<STRINGHTOP;I++) 
+    { CH=repchar(I); wi(CH); ws(", "); if (CH==0) ws("\n  "); }
+  wi(repchar(STRINGHTOP));ws("\n};\n\n");
+  ws("int strhtop="); wi(STRINGHTOP); ws(";\n");
+#endif
+}
+
+#if INITFILE
+int strhtop;
+#endif
+
+LOCAL Init_Stringtab(void)
+{ int I; STRING S;
+#if INITFILE
+  if( fscanf( inifile, "STRINGHTOP %d\n", &strhtop ) != 1 )
+    inierror( "Reading string header" );
+
+#endif
+  STRINGHTOP= (STRING)strhtop;
+
+#if INITFILE
+  for( S=BASESTRING; S<=STRINGHTOP; S++ ) {
+    if( fscanf( inifile, " %d", &I ) != 1 )
+      inierror( "Reading string" );
+    if( I==0 && fscanf( inifile, "\n" ) != 0 )
+      inierror( "Reading eoln string" );
+    repchar(S)=I;
+
+  }
+#else
+  for(I=0,S=BASESTRING;S<=STRINGHTOP;I++,S++)
+    repchar(S)=st[I];
+#endif
+}
+
+
+/******************************/
+/*                            */
+/*  HASHTAB                   */
+/*                            */
+/******************************/
+
+IMPORT ATOM HASHTAB[]; 
+IMPORT int HASH_SIZE;
+IMPORT ATOM ht[];
+
+LOCAL void SAVE_HASHTAB(void)
+{ 
+  int I;
+#if INITFILE
+  ws( "HASHTAB\n" );
+  for(I=0;I<=HASH_SIZE;I++ ) {
+     wi( HASHTAB[I] ); ws( "\n" );
+  }
+#else
+  ws("\nunsigned short ht[]=\n{ ");
+  for (I=0;I<HASH_SIZE;) 
+  { wi(HASHTAB[I++]); ws(","); if (I%16==0) ws("\n  "); }
+  wi(HASHTAB[HASH_SIZE]);
+  ws("\n};\n\n");
+#endif
+}
+
+LOCAL Init_Hashtab(void)
+{ int I;
+#if INITFILE
+  int hti;
+  if( fscanf( inifile, "HASHTAB\n" )  != 0)
+    inierror( "Reading hashtab header" );
+
+  for( I =0 ; I <= HASH_SIZE; I++ ) {
+    if( fscanf( inifile, "%d\n", &hti ) != 1 )
+      inierror( "Reading hashtab" );
+    HASHTAB[I]=(ATOM)hti;
+  }
+#else
+  for(I=0;I<=HASH_SIZE;I++) HASHTAB[I]=(ATOM)ht[I];
+#endif
+}
+
+
+/******************************/
+/*                            */
+/*  ATOMTAB                   */
+/*                            */
+/******************************/
+
+IMPORT ATOM BASEATOM,ATOMHTOP,LASTATOM,ATOMSTOP;
+IMPORT STRING STRINGSTOP;
+IMPORT struct { unsigned short ar,cl,ls,nx,ch,pr,in; } at[];
+IMPORT int athtop,lstatm;
+
+LOCAL void save_atom(ATOM A)
+{ 
+#if INITFILE
+  wi(arity(A)); ws(" "); 
+  if (A==MAIN_0) wi(0); else wi(ENCODE_TERM(clause(A))); ws(" "); 
+  wi(longstring(A)); ws(" ");
+  wi(nextatom(A)); ws(" ");
+  wi(chainatom(A)); ws(" ");
+  wi(oprec(A)); ws(" ");
+  wi(info(A)); ws( "\n" );
+#else
+  ws("{");
+  wi(arity(A)); ws(","); 
+  if (A==MAIN_0) wi(0); else wi(ENCODE_TERM(clause(A))); ws(","); 
+  wi(longstring(A)); ws(",");
+  wi(nextatom(A)); ws(",");
+  wi(chainatom(A)); ws(",");
+  wi(oprec(A)); ws(",");
+  wi(info(A));
+  ws("}");
+#endif
+}
+
+LOCAL void SAVE_ATOMTAB(void)
+{
+  ATOM A;
+#if INITFILE
+  ws( "ATOMHTOP " ); wi( (int) ATOMHTOP ); ws( " " );
+  ws( "LASTATOM " ); wi( (int) LASTATOM ); ws( "\n" );
+  for (A=BASEATOM;A<=ATOMHTOP;inc_atom(A))
+     save_atom(A);
+#else
+  ws("struct { unsigned short ar,cl,ls,nx,ch,pr,in; } at[]=\n");
+  ws("{ ");
+  for (A=BASEATOM;A<ATOMHTOP;inc_atom(A)) { save_atom(A); ws(",\n  "); }
+  save_atom(ATOMHTOP); ws("\n");
+  ws("};\n\n");
+  ws("int athtop="); wi((int)ATOMHTOP); 
+  ws(",lstatm="); wi((int)LASTATOM); ws(";\n\n");
+#endif
+}
+       
+#if INITFILE
+int athtop, lstatm;
+#endif
+
+LOCAL Init_Atomtab(void)
+{ 
+  ATOM A; int I;
+#if INITFILE
+  int ar, cl, ls, nx, ch, pr, in;
+  if( fscanf( inifile, "ATOMHTOP %d LASTATOM %d\n", &athtop, &lstatm) != 2 )
+    inierror( "Reading Atoms header" );
+#endif
+  ATOMHTOP= (ATOM)athtop;
+  LASTATOM= (ATOM)lstatm;
+
+  for (A=BASEATOM,I=0;A<=ATOMHTOP;inc_atom(A),I++)
+    {
+#if INITFILE
+      if( fscanf( inifile,
+                    "%d %d %d %d %d %d %d\n",
+                     &ar, &cl, &ls, &nx, &ch, &pr, &in )  != 7)
+        inierror( "Reading atoms" );
+      arity(A)=(ARITY_TYPE)ar;
+      clause(A)=DECODE_TERM(cl);
+      longstring(A)=(STRING)ls;
+      nextatom(A)=(ATOM)nx;
+      chainatom(A)=(ATOM)ch;
+      oprec(A)=(PREC_TYPE)pr;
+      info(A)=(INFO_TYPE)in;
+#else
+      arity(A)=(ARITY_TYPE)at[I].ar;
+      clause(A)=DECODE_TERM(at[I].cl);
+      longstring(A)=(STRING)at[I].ls;
+      nextatom(A)=(ATOM)at[I].nx;
+      chainatom(A)=(ATOM)at[I].ch;
+      oprec(A)=(PREC_TYPE)at[I].pr;
+      info(A)=(INFO_TYPE)at[I].in;
+#endif
+#if HACKY
+      nrofcalls(A)=0;
+#endif
+    }
+  nextatom(ATOMSTOP)=(card)STRINGSTOP;
+}
+
+
+/******************************/
+/*                            */
+/*  FREELIST                  */
+/*                            */
+/******************************/
+
+IMPORT TERM freelist[];
+IMPORT int fl[];
+
+LOCAL void SAVE_FREELIST(void)
+{ int I; TERM T;
+#if INITFILE
+  ws( "FREELIST\n" );
+  for (I=0;I<=MAXARITY;I++) {
+    wi(ENCODE_TERM(freelist[I])); ws( "\n" );
+  }
+#else
+  ws("\nint fl[]=\n{ ");
+  for (I=0;I<MAXARITY;) 
+  { wi(ENCODE_TERM(freelist[I++])); ws(","); 
+    if (I%16==0) ws("\n  "); 
+  }
+  wi(ENCODE_TERM(freelist[MAXARITY])); 
+  ws("\n};\n\n");
+#endif
+}
+
+LOCAL Init_Freelist(void)
+{ int I; 
+#if INITFILE
+  int fl;
+  if( fscanf( inifile, "FREELIST\n" ) != 0)
+    inierror( "Reading Freelist header" );
+  for(I=0; I<= MAXARITY; I++ ) {
+    if( fscanf( inifile, "%d\n", &fl )  != 1)
+      inierror( "Reading Freelist" );
+    freelist[I]=DECODE_TERM(fl);
+  }
+#else   
+  for(I=0;I<=MAXARITY;I++) freelist[I]=DECODE_TERM(fl[I]);
+#endif
+}
+
+
+/******************************/
+/*                            */
+/*  TERMTAB                   */
+/*                            */
+/******************************/
+
+IMPORT TERM HEAPTOP,LASTTERM;
+IMPORT CLAUSE IMPG;
+IMPORT unsigned short names[];
+IMPORT unsigned short sons[];
+IMPORT int hptop,ipg;
+
+LOCAL void SAVE_TERMTAB(void)
+{
+  TERM T; int I;
+#if INITFILE
+  ws( "HEAPTOP " ); wi(ENCODE_TERM(HEAPTOP)); ws( "\n" );
+  ws( "IMPG " ); wi(ENCODE_TERM(IMPG)); ws("\n");
+  for (T=HEAPTOP;T<=LASTTERM;inc_term(T)) 
+    {
+      wi(name(T)); ws( " " ); 
+      if (name(T)==INTT) wi(ival(T));
+      else if (name(T)==SKELT) wi(offset(T));
+      else wi(ENCODE_TERM(son(T)));
+      ws( "\n" );
+    }
+#else
+  ws("unsigned short names[]=\n");
+  ws("{ ");
+  for (T=HEAPTOP,I=0;T<LASTTERM;inc_term(T)) 
+    { wi(name(T)); ws(", "); if (++I%8==0) ws("\n  ");  }
+  wi(name(LASTTERM)); ws("\n};\n\n");
+
+  ws("unsigned short sons[]=\n");
+  ws("{ ");
+  for (T=HEAPTOP,I=0;T<LASTTERM;inc_term(T)) 
+    { if (name(T)==INTT) wi(ival(T));
+      else if (name(T)==SKELT) wi(offset(T));
+      else wi(ENCODE_TERM(son(T))); 
+      ws(", "); if (++I%8==0) ws("\n  ");  
+    } 
+  if (name(LASTTERM)==INTT) wi(ival(LASTTERM));
+  else if (name(LASTTERM)==SKELT) wi(offset(LASTTERM));
+  else wi(ENCODE_TERM(son(LASTTERM))); 
+  ws("\n};\n\n");
+
+  ws("hptop="); wi(ENCODE_TERM(HEAPTOP)); 
+  ws(",ipg="); wi(ENCODE_TERM(IMPG)); ws(";\n");
+#endif
+}
+
+#if INITFILE
+int hptop, ipg;
+#endif
+
+LOCAL Init_Termtab(void)
+{ 
+  TERM X; int I;
+#if INITFILE
+  int iname, ison;
+  if( fscanf( inifile, "HEAPTOP %d\n", &hptop ) != 1 )
+    inierror( "Reading Termtab header 1" );
+  if( fscanf( inifile, "IMPG %d\n", &ipg ) != 1)
+    inierror( "Reading Termtab header 2" );
+#endif
+  HEAPTOP = DECODE_TERM(hptop);
+  IMPG = DECODE_TERM(ipg);
+  for (X=HEAPTOP,I=0;X<=LASTTERM;inc_term(X),I++)
+    { 
+#if INITFILE
+      if( fscanf( inifile, "%d %d\n", &iname, &ison ) != 2)
+        inierror( "Reading Termtab" );
+      name(X)=(ATOM)iname;
+      if (name(X)==INTT) ival(X)=ison;
+      else if (name(X)==SKELT) offset(X)=ison;
+      else son(X)=DECODE_TERM(ison);
+#else
+      name(X)=(ATOM)names[I];
+      if (name(X)==INTT) ival(X)=sons[I];
+      else if (name(X)==SKELT) offset(X)=sons[I];
+      else son(X)=DECODE_TERM(sons[I]);
+#endif
+    }
+}
+
+
+/******************************/
+/*                            */
+/*  SAVE / INIT               */
+/*                            */
+/******************************/
+
+GLOBAL boolean DOSAVE(void)
+{   
+    DOTELL();
+#if INITFILE
+    SAVE_TERMTAB();
+    SAVE_ATOMTAB();
+    SAVE_STRINGTAB();
+    SAVE_HASHTAB();
+    SAVE_FREELIST();
+#else
+    ws("\n\n\n");
+    SAVE_STRINGTAB();
+    SAVE_HASHTAB();
+    SAVE_ATOMTAB();
+    SAVE_FREELIST();
+    SAVE_TERMTAB();
+    ws("\n\n\n");
+#endif
+    CloseFile(outputfile);A0=mkatom(USER_0);
+    return DOTELL();
+}
+
+
+GLOBAL InitAll(void)
+{
+#if INITFILE
+  inifile = fopen( RESTORESTATE, "r" );
+  if( inifile == NULL )
+    inierror( "Opening saved state" );
+#endif
+  Init_Termtab();
+  Init_Atomtab();
+  Init_Stringtab();
+  Init_Hashtab();
+  Init_Freelist();
+#if INITFILE
+  if( fclose( inifile ) )
+    inierror( "Closing saved state" );
+#endif
+}
+
+

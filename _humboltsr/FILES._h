@@ -1,0 +1,99 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     **
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+#include "window.h"
+
+#if !BIT8
+#define MAXFILES         20
+#define BUFLENGTH        85
+#endif
+#if BIT8
+#define MAXFILES         6
+#define BUFLENGTH        16
+#endif
+
+typedef struct {
+     TERM f_name;
+     ATOM f_log_name;
+     int f_in_ptr;                      /* os file pointer */
+     int f_out_ptr;
+     WIN f_win_ptr;                     /* window pointer */
+     TERM f_list_ptr;
+     card f_type;
+     boolean f_is_eof;   /* end of file */
+     boolean f_is_a_tty; /* is a tty */
+     boolean f_can_read; /* file is open for read */
+     boolean f_can_write; /* file is open for write*/
+     boolean f_is_inputfile;  /* file is currently used as inputfile */
+     char f_buffer[BUFLENGTH];
+     int  f_charpos;
+     int  f_length;
+     int  f_lineno;
+     } file_type;
+
+extern file_type file_tab[];
+
+#define FNAME(f)          file_tab[f].f_name
+#define FTYPE(f)          file_tab[f].f_type
+#define FINPTR(f)         file_tab[f].f_in_ptr
+#define FOUTPTR(f)        file_tab[f].f_out_ptr
+#define FWINPTR(f)        file_tab[f].f_win_ptr
+#define FLISTPTR(f)       file_tab[f].f_list_ptr
+#define FLOGNAME(f)       file_tab[f].f_log_name
+
+#define ISEOF(f)            file_tab[f].f_is_eof
+#define ISTTY(f)          file_tab[f].f_is_a_tty
+#define CANREAD(f)        file_tab[f].f_can_read
+#define CANWRITE(f)       file_tab[f].f_can_write
+#define ISINPUT(f)        file_tab[f].f_is_inputfile
+
+#define FBUFFER(f)        file_tab[f].f_buffer
+#define FCHARPOS(f)       file_tab[f].f_charpos
+#define FBUFLENGTH(f)     file_tab[f].f_length
+#define FLINENO(f)        file_tab[f].f_lineno
+
+#define LINELENGTH       FBUFLENGTH(inputfile)
+#define CHARPOS          FCHARPOS(inputfile)
+#define LINEBUF          FBUFFER(inputfile)
+#define LINENUMBER       FLINENO(inputfile)
+
+#define fmode            int
+#define write_mode       1
+#define read_mode        2
+#define read_write       3
+#define look_mode        4
+
+#define file             int
+#define STDIN            0
+#define STDOUT           1
+#define STDERR           2
+
+#define NOFILE           -1
+#define ERRFILE          -2
+
+#define NORMFT           1
+#define WINDOWFT         2
+#define LISTFT           3
+
+extern file inputfile,outputfile;
+
+/* modes for buffered io */
+IMPORT void out_buffer();
+#define BUF_ON 1
+#define BUF_OFF 2
+#define BUF_FLUSH 3
+
+

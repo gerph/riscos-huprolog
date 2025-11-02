@@ -1,0 +1,19 @@
+settype ARITH Text 
+settype ATOMS Text 
+settype DATAB Text 
+settype EVAL Text 
+settype EXEC Text 
+settype IO Text 
+settype MANAGER Text 
+settype MEMORY Text 
+settype MISC Text 
+settype PROLOG Text 
+settype READ Text 
+settype SAVE Text 
+settype SYMBOL Text 
+settype SYS Text 
+settype UNI Text 
+settype unixio Text 
+settype USER Text 
+settype WRITE Text 
+*quit

@@ -1,0 +1,253 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     **
+**                                                **
+**  Release 1.61  September 1989                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+#include "systems.h"
+#include "types.h"
+#include "atoms.h"
+#include "errors.h"
+
+#if USER
+
+IMPORT TERM A0,A1,A2;                /* from evalpred.c */
+IMPORT void InitUAtom();            /* from atomtabl.c */
+IMPORT int BCT;
+IMPORT TERM GLOTOP;
+IMPORT ENV E,CHOICEPOINT;
+IMPORT void ARGERROR(),ERROR();
+IMPORT boolean INTRES();
+IMPORT boolean isatom(),appears();
+IMPORT void STARTATOM(),ATOMCHAR();
+IMPORT string NEWATOM;
+IMPORT void TESTATOM();
+
+/*
+EXPORT boolean CallUser();            only used in evalpred.c 
+EXPORT void InitUser();               only used in prolog.c 
+*/
+
+#define useratom(i)        (LAST_ATOM + atom_units(i))
+
+/* used by auster */
+
+static boolean DOLENGTH(void)
+{ int i=0; TERM T;
+  T=A1;
+  while(name(T)==CONS_2)
+    {i++; T=arg2(T); }
+  TESTATOM(NIL_0,T);
+  return INTRES(A0,i);
+}
+
+#if SYMBOLARITH
+static boolean DOAPPEARS(void)
+{
+  if (!isatom(A0)) ARGERROR();
+  return appears(name(A0),1,A1);
+}
+#endif
+
+boolean static DONTH(void)
+{
+  TERM Y;
+  int N;
+  if (name(A1)==INTT) N=ival(A1); else N=INTVALUE(A1);
+  if (N<=0) return false;
+  Y=A2;
+  while (--N>=1 && name(Y)==CONS_2) Y=arg2(Y); 
+  if (name(Y)==CONS_2) return UNI(A0,son(Y)); else return false;
+}
+
+static boolean DOEXTEND(void)
+{ TERM X,Y;
+  STRING S;
+  int C;
+  if(!isatom(A0)) return false;
+  STARTATOM();
+  S=longstring(name(A0));
+  while(C=repchar(S++)) ATOMCHAR(C);
+  X=A1;
+  while(name(X)==CONS_2)
+  { Y=arg1(X);
+    if (name(Y)==INTT) C=ival(Y);
+    else C=INTVALUE(Y);
+    if(C <=0 || C > 255) ARGERROR();
+    ATOMCHAR(C);
+    X=arg2(X);
+  }
+  TESTATOM(NIL_0,X);
+  ATOMCHAR(0);
+  return UNI(A2,mkatom(LOOKUP(NEWATOM,0,false)));
+}
+
+static boolean DONAMELGT(void)
+{ register int I; 
+  register STRING S;
+  if(!isatom(A1)) ARGERROR();
+  S=longstring(name(A1)); I=0;
+  while(repchar(S++)) I++;
+  return INTRES(A0,I);
+}
+
+static boolean DOIDENTIFIER(void)
+{ register STRING S;
+  register char ch;
+  if(!isatom(A0)) return false;
+  S=longstring(name(A0));
+  ch= repchar(S);
+  if (ch<'a' || ch>'z') return false;
+  while (ch = repchar(S++)) 
+  { if ('a'<=ch && ch <='z') continue;
+    if (ch=='_') continue;
+    if ('0'<=ch || ch<='9') continue;
+    return false;
+  }
+  return true;
+}
+
+static int termlgt(TERM T)
+{ register int I; 
+  deref(T);
+  if(name(T)>NORMATOM) 
+  { if(name(T)==CONS_2) 
+      { I= -2;
+	if(name(arg2(T))==NIL_0) I-=2;
+      }
+    else { STRING S;
+	   S=longstring(name(T)); I=0;
+			while(repchar(S++)) I++;
+         }
+    { int N;
+      for(N=arity(name(T)),T=son(T);--N>=0;next_br(T))
+	I+=termlgt(T)+2;  
+    }
+  }
+  else if(name(T)==UNBOUNDT) I=3; 
+  else if(name(T)==INTT)
+       { int S;
+	     I=1; S=ival(T); 
+	     if(S<0) {++I; S= -S;}
+	     while(S>=10) {++I; S=S/10;} 
+	   }
+#if LONGARITH
+  else if(name(T)==LONGT)
+       { LONG S;
+	     I=1; S=longval(T); 
+	     if(S<0l) {++I; S= -S;}
+	     while(S>=10l) {++I; S=S/10l;} 
+	   }
+#endif
+  return I;
+}
+
+static int termsize(TERM T)
+{ register int I,N; 
+  deref(T);
+  I=1;
+  if(name(T)>NORMATOM) 
+    for(N=arity(name(T)),T=son(T);--N>=0;next_br(T)) I+=termsize(T);  
+  return I;
+}
+
+static boolean DOGENINT(void)
+{ 
+  return INTRES(A0,BCT++);
+}
+
+static boolean DOGENVAR(void)
+{ string S;
+  int I;
+  static char VARNAME[12];
+  S=itoa(BCT++);
+  I=1; 
+  VARNAME[0]='v';
+  while(VARNAME[I++]=*S++);
+  return UNI(A0,mkatom(LOOKUP(VARNAME,0,false)));
+}
+
+LOCAL boolean DOGENFREEVAR(void)
+{ register TERM T;
+  register TERM TT;
+  register ATOM A;
+  string S;
+  int I,N;
+  static char VARNAME[12];
+  N=0;
+newvar:
+  S=itoa(N++);
+  VARNAME[0]='v';
+  I=1;
+  while(VARNAME[I++]=*S++);
+  A=LOOKUP(VARNAME,0,false);
+  T=A1;
+  while (name(T)==CONS_2)
+  { 
+    TT=son(T); deref(TT);
+    if (name(TT)==COLON_2) 
+    { TT=son(TT); deref(TT);
+      if (name(TT)==A) goto newvar;
+    }
+    T=br(son(T));
+    deref(T);
+  }
+  return UNI(A0,mkatom(A));
+}
+
+
+void InitUser(int Phase)
+{
+InitUAtom(Phase,useratom(0),"$length",EVALP,NONO,2,false);
+InitUAtom(Phase,useratom(1),"genint",BTEVALP,NONO,1,false);
+InitUAtom(Phase,useratom(2),"namelgt",EVALP,NONO,2,false);
+InitUAtom(Phase,useratom(3),"termlgt",EVALP,NONO,2,false);
+InitUAtom(Phase,useratom(4),"termsize",EVALP,NONO,2,false);
+InitUAtom(Phase,useratom(5),"identifier",EVALP,NONO,1,false);
+InitUAtom(Phase,useratom(6),"genvar",BTEVALP,NONO,1,false);
+InitUAtom(Phase,useratom(7),"genfreevar",EVALP,NONO,2,false);
+#if SYMBOLARITH
+InitUAtom(Phase,useratom(8),"appears",EVALP,NONO,2,false);
+#endif
+InitUAtom(Phase,useratom(9),"extend_name",EVALP,NONO,3,false);
+InitUAtom(Phase,useratom(10),"n_th",EVALP,NONO,3,false);
+}
+
+boolean CallUser(TERM X)
+{ boolean res=false;
+    switch(name(X))
+    {
+     case useratom(0):res=DOLENGTH();break;
+     case useratom(1):res=DOGENINT();break;
+     case useratom(2):res=DONAMELGT();break;
+     case useratom(3):res=INTRES(A0,termlgt(A1));break;
+     case useratom(4):res=INTRES(A0,termsize(A1));break;
+     case useratom(5):res=DOIDENTIFIER(); break;
+     case useratom(6):res=DOGENVAR(); break;
+     case useratom(7):res=DOGENFREEVAR(); break;
+#if SYMBOLARITH
+     case useratom(8):res=DOAPPEARS(); break;
+#endif
+     case useratom(9):res=DOEXTEND(); break;
+     case useratom(10):res=DONTH(); break;
+     default:
+          ws("\007sorry, but this predicate is reserved, ");
+          ws("but not implemented yet\n");
+          ERROR(CALLE);
+    }
+  return res;
+}
+
+#endif
+
+

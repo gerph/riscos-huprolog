@@ -1,0 +1,205 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     **
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+#include <stdlib.h>
+#include <stdio.h>
+#include "systems.h"
+#include "manager.h"
+#include "types.h"
+
+#if BYTEOFFSET | WORDOFFSET
+
+/* TERMENTRY TERMTAB[MAX_TERMS]; */
+fardeclare(ATOM,tNAME,MAX_TERMS);
+fardeclare(card,tNODECASE,MAX_TERMS);
+
+/* ATOMENTRY ATOMTAB[MAX_ATOMS]; */
+fardeclare(STRING,a_IDENT,MAX_ATOMS);
+fardeclare(ATOM,a_NEXTATOM,MAX_ATOMS);
+fardeclare(ATOM,a_CHAINATOM,MAX_ATOMS);
+declare(CLAUSE,a_CLAUSE,MAX_ATOMS);
+declare(ARITY_TYPE,a_ARITY,MAX_ATOMS);
+fardeclare(PREC_TYPE,a_PREC,MAX_ATOMS);
+fardeclare(INFO_TYPE,a_INFO,MAX_ATOMS);
+#if HACKY
+fardeclare(card,a_NROFCALLS,MAX_ATOMS);
+#endif
+
+/* TRAILENTRY TRAILTAB[MAX_TRAILER] */
+fardeclare(TERM,TRAILTAB,MAX_TRAILER);
+
+/* ENVENTRY ENVTAB[MAX_ENVS]; */
+declare(TERM,e_FCALL,MAX_ENVS);
+declare(TERM,e_FBASE,MAX_ENVS);
+declare(ENV,e_FENV,MAX_ENVS);
+declare(ENV,e_FCHOICE,MAX_ENVS);
+fardeclare(ATOM,e_FATOM,MAX_ENVS);
+fardeclare(CLAUSE,e_FCLAUSE,MAX_ENVS);
+fardeclare(TRAIL,e_FTRAIL,MAX_ENVS);
+fardeclare(card,e_FKIND,MAX_ENVS);
+
+/* char STRINGTAB[MAX_STRINGS]; */
+fardeclare(char,STRINGTAB,MAX_STRINGS);
+
+#endif
+
+#if POINTEROFFSET
+
+#ifdef DYNMEM
+
+int MAX_ATOMS = DEF_ATOMS;
+int MAX_TERMS = DEF_TERMS;
+int MAX_TRAILER = DEF_TRAILER;
+int MAX_ENVS = DEF_ENVS;
+int MAX_STRINGS = DEF_STRINGS;
+
+TERMNODE *TERMAREA;
+
+/* ATOMENTRY ATOMTAB[MAX_ATOMS]; */
+ARITY_TYPE *a_ARITY;
+STRING *a_IDENT;
+ATOM *a_NEXTATOM;
+ATOM *a_CHAINATOM;
+CLAUSE *a_CLAUSE;
+PREC_TYPE *a_PREC;
+INFO_TYPE *a_INFO;
+#if HACKY
+card *a_NROFCALLS;
+#endif
+
+TERM *TRAILTAB;
+
+TERM *e_FCALL;
+TERM *e_FBASE;
+ENV *e_FENV;
+ENV *e_FCHOICE;
+ATOM *e_FATOM;
+CLAUSE *e_FCLAUSE;
+TRAIL *e_FTRAIL;
+
+char *STRINGTAB;
+
+extern TRAIL TRAILEND;
+extern TRAIL BASETRAIL;
+extern TRAIL ENDTRAILER;
+extern TERM BASETERM;
+extern TERM GLOTOP;       
+extern TERM HEAPTOP;
+extern TERM LASTTERM;
+extern TERM tempterm;  /* for phy_name */
+extern CLAUSE clausechain;   /* used for retract */
+extern ATOM ATOMSTOP;
+extern STRING STRINGSTOP;
+
+
+/* ACK! BARF!  It is *CRITICAL* that calloc is used here.   The code expects a lot of */
+/* the tables to be initialized to 0 (as a synonym for NULL - v.portable :-(   )      */
+
+#define ini_calloc(typ, num, msg) \
+        ( (typ *) safe_calloc( num, sizeof( typ ), msg ) )
+
+static void *safe_calloc( int num, size_t size, char *msg )
+{
+void *memptr = calloc( num, size );
+      if( memptr == NULL ) {
+        fprintf( stderr, "Could not allocate: %s\n", msg );
+        exit(1);
+      }
+      return memptr;
+}
+
+
+void InitdynMem(void)
+{
+
+TERMAREA = ini_calloc( TERMNODE, MAX_TERMS, "Term heap" );
+
+/* ATOMENTRY ATOMTAB[MAX_ATOMS]; */
+a_ARITY = ini_calloc( ARITY_TYPE, MAX_ATOMS, "Atom table" );         
+a_IDENT = ini_calloc(STRING, MAX_ATOMS, "Atom table" );
+a_NEXTATOM = ini_calloc(ATOM,MAX_ATOMS, "Atom table" );
+a_CHAINATOM = ini_calloc(ATOM,MAX_ATOMS, "Atom table" );
+a_CLAUSE = ini_calloc(CLAUSE,MAX_ATOMS, "Atom table" );
+a_PREC = ini_calloc(PREC_TYPE,MAX_ATOMS, "Atom table");
+a_INFO = ini_calloc(INFO_TYPE,MAX_ATOMS, "Atom table" );
+#if HACKY
+a_NROFCALLS = ini_calloc(card,MAX_ATOMS, "Atom table" );
+#endif
+
+/* volatile */ 
+
+TRAILTAB = ini_calloc(TERM, MAX_TRAILER, "Var Trail Stack" );
+
+/* ENVENTRY ENVTAB[MAX_ENVS]; */
+e_FCALL = ini_calloc(TERM,MAX_ENVS, "Active Goal Stack");
+e_FBASE = ini_calloc(TERM,MAX_ENVS, "Active Goal Stack" );
+e_FENV = ini_calloc(ENV,MAX_ENVS, "Active Goal Stack");
+e_FCHOICE = ini_calloc(ENV,MAX_ENVS, "Active Goal Stack");
+e_FATOM = ini_calloc(ATOM,MAX_ENVS, "Active Goal Stack");
+e_FCLAUSE = ini_calloc(CLAUSE,MAX_ENVS, "Active Goal Stack");
+e_FTRAIL = ini_calloc(TRAIL,MAX_ENVS, "Active Goal Stack");
+
+STRINGTAB = ini_calloc( char, MAX_STRINGS, "String table" );
+
+TRAILEND = &TRAILTAB[1];
+BASETRAIL = &TRAILTAB[1];
+ENDTRAILER = &TRAILTAB[MAXTRAILER];
+BASETERM= &TERMAREA[0];
+GLOTOP= &TERMAREA[1];       
+HEAPTOP= &TERMAREA[MAXTERMS];
+LASTTERM= &TERMAREA[MAXTERMS];
+tempterm=nil_term;
+clausechain=nil_term;   /* used for retract */
+ATOMSTOP=MAXATOMS;
+STRINGSTOP=MAXSTRINGS;
+
+}
+
+#else
+
+TERMNODE TERMAREA[MAX_TERMS];
+
+/* ATOMENTRY ATOMTAB[MAX_ATOMS]; */
+declare(ARITY_TYPE,a_ARITY,MAX_ATOMS);
+fardeclare(STRING,a_IDENT,MAX_ATOMS);
+fardeclare(ATOM,a_NEXTATOM,MAX_ATOMS);
+fardeclare(ATOM,a_CHAINATOM,MAX_ATOMS);
+declare(CLAUSE,a_CLAUSE,MAX_ATOMS);
+fardeclare(PREC_TYPE,a_PREC,MAX_ATOMS);
+fardeclare(INFO_TYPE,a_INFO,MAX_ATOMS);
+#if HACKY
+fardeclare(card,a_NROFCALLS,MAX_ATOMS);
+#endif
+
+/* volatile */ TERM TRAILTAB[MAX_TRAILER];
+
+/* ENVENTRY ENVTAB[MAX_ENVS]; */
+declare(TERM,e_FCALL,MAX_ENVS);
+declare(TERM,e_FBASE,MAX_ENVS);
+declare(ENV,e_FENV,MAX_ENVS);
+declare(ENV,e_FCHOICE,MAX_ENVS);
+fardeclare(ATOM,e_FATOM,MAX_ENVS);
+fardeclare(CLAUSE,e_FCLAUSE,MAX_ENVS);
+fardeclare(TRAIL,e_FTRAIL,MAX_ENVS);
+
+char STRINGTAB[MAX_STRINGS];
+
+#endif
+
+#endif
+
+
+

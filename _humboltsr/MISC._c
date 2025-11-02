@@ -1,0 +1,185 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     **
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  (C) 1989      Humboldt-University             **
+**                Department of Mathematics       **
+**                GDR 1086 Berlin, P.O.Box 1297   **
+**                                                **
+****************************************************
+***************************************************/
+
+#include "systems.h"
+#include "atoms.h"
+#include "types.h"
+#include "errors.h"
+#include "manager.h"
+
+IMPORT TERM A0,A1,A2;            /* from evalpreds.c     */
+IMPORT int BCT;
+IMPORT boolean INTRES(); /* from unify.c         */
+#if LONGARITH
+IMPORT boolean LONGRES();        /* from unify.c         */
+#endif
+IMPORT long TIMER();             /* from systems.c       */
+#if !RISCOS
+IMPORT struct tm *localtime();   /* from clib            */
+IMPORT long time();              /* from clib            */
+#endif
+IMPORT boolean UNIFY();          /* from unify.c         */
+IMPORT ENV E;
+IMPORT void SYSTEMERROR();
+/*
+EXPORT boolean DOTIME(),DOTIMER();
+EXPORT boolean DOANCESTORS()
+*/
+
+/**************************************************/
+/*               date & time                      */
+/**************************************************/
+
+#if !CPM 
+
+#include <time.h>
+
+#if !RISCOS
+LOCAL long LTIME;
+LOCAL struct tm *TIMEREC;
+#else
+LOCAL time_t LTIME;
+LOCAL struct tm *TIMEREC;
+#endif
+
+GLOBAL boolean DOTIME(ATOM A)
+{ 
+ (void)time(&LTIME);
+ TIMEREC=localtime(&LTIME);
+ switch(A)
+ {
+     case TIME_3:
+         return INTRES(A0,TIMEREC->tm_hour) && 
+         INTRES(A1,TIMEREC->tm_min) && 
+         INTRES(A2,TIMEREC->tm_sec); 
+     case DATE_3:
+         return  INTRES(A0,TIMEREC->tm_year) &&
+         INTRES(A1,TIMEREC->tm_mon + 1) &&
+         INTRES(A2,TIMEREC->tm_mday);
+    case WEEKDAY_1:
+         return INTRES(A0,(TIMEREC->tm_wday?TIMEREC->tm_wday:7));
+    default:
+         SYSTEMERROR("misc.c/DOTIME");
+ }
+#if lint
+ return false;
+#endif
+}
+
+#endif
+
+GLOBAL boolean DOTIMER(void)
+{ static long STARTTIME,CURRTIME;
+         CURRTIME=TIMER();
+         if(name(A0)==INTT)
+           { STARTTIME=CURRTIME-(long)ival(A0); return true; }
+         else
+#if LONGARITH
+         if(name(A0)==LONGT)
+           { STARTTIME=CURRTIME-longval(A0); return true; }
+         else return LONGRES(A0,CURRTIME-STARTTIME);
+#endif
+#if ! LONGARITH
+         return INTRES(A0,(int)(CURRTIME-STARTTIME));
+#endif
+}
+
+
+GLOBAL boolean DOANCESTORS(void)
+{
+    TERM T,TT,C;
+    ENV CE;
+
+    TT=mkfunc(CONS_2,mk2sons(UNBOUNDT,nil_term,NIL_0,nil_term)); T=TT;
+    for(CE=E;CE;CE=env(CE))
+        if((C=call(CE)) && name(C)!=SEMI_2 && name(C)!=COMMA_2)
+        {   T=son(T); 
+            (void)UNIFY(1,T,C,BE,base(env(CE)),MAXDEPTH);
+            next_br(T);
+            name(T)=CONS_2;
+            son(T)=mk2sons(UNBOUNDT,nil_term,NIL_0,nil_term);
+        }
+    name(T)=NIL_0; son(T)=nil_term;
+    return UNI(A0,TT);
+}
+
+
+
+GLOBAL boolean islist(register TERM T, boolean ascii)
+{
+    int counter=0;
+    deref(T);
+    while(name(T)==CONS_2)
+    {
+        if(ascii)
+      {
+            register TERM TT;
+            TT=arg1(T);
+            if(name(TT) !=INTT) return false;
+            if(ival(TT) < 0 || ival(TT) > 255) return false;
+        }
+        T=arg2(T);
+        if(counter++ > MAXTERMS) return false; /* zyklic term */
+    }
+    return (name(T)==NIL_0);
+}
+
+GLOBAL boolean DOMEMBER(void)
+{
+  register int I=0;
+  register TERM T,TT;
+  register ATOM A;
+  T=A1; A=name(A0);
+  while (I<BCT && name(T)==CONS_2) { T=br(son(T)); deref(T); I++; }
+  if (I!=BCT) ARGERROR();
+  while (name(T)==CONS_2)
+  { BCT++;
+    TT=son(T); deref(TT);
+    if (name(TT)==UNBOUNDT) return UNI(son(T),A0);
+    if (A==UNBOUNDT || name(TT)==A) if (UNI(son(T),A0)) return true;
+    if (BCT>100000) return false; /* probably cyclic term */
+    T=br(son(T));
+    deref(T);
+  }
+  return false;
+}
+
+static TERM TAIL;
+
+static TERM append(register TERM X)
+{ register TERM Z;
+  register TERM Y;
+  if (name(X)==NIL_0) return son(TAIL);
+  if (name(X)!=CONS_2) ARGERROR();
+  {  X=son(X); Y=br(X);
+     deref(X); deref(Y);
+     Z=mk2sons(name(X),son(X),CONS_2,append(Y));
+     return Z;
+  }
+}
+
+GLOBAL boolean DOAPPEND(void)
+{
+  TERM X;
+  if (name(A0)==NIL_0) return UNI(A1,A2);
+  if (name(A1)==NIL_0) return UNI(A0,A2);
+  X=mkfreevar(); TAIL=mkfreevar();
+  UNI(X,A0); UNI(TAIL,A1);
+  deref(X);
+  return UNI(mkfunc(CONS_2,append(X)),A2);
+}
+
+
