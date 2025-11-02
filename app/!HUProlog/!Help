@@ -1,0 +1,8 @@
+HUProlog
+========
+
+This is a repackaged version of HUProlog, to go along with the
+new filetype allocation.
+
+This version of HUProlog should run correctly in a taskwindow,
+by double clickibg the file.

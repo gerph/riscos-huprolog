@@ -1,0 +1,307 @@
+HU-PROLOG - Humboldt University Prolog  RISC-OS version 1.1
+
+SYNOPSIS
+prolog [-v] [-BOOT] [ -r restorefile ] [-l libfile] 
+       [-a max_no_atoms] [-t max_no_terms] [-c max_no_crit_vars]
+       [-g max_no_active_goals] [-s max_size_string_table]
+
+
+COPYRIGHT
+     HUProlog is freeware.  It may be freely copied and redistributed,
+     provided all the files present in the original
+     distribution are included, unaltered.  If it is redistrubted for
+     profit it would be appreciated if 10 per cent or so of the 
+     distribution fee is sent to the authors listed below.  They are by no 
+     means wealthy.  Users of this software are asked to make a donation 
+     appropriate to their wealth and usage.
+     Commercial Prolog's cost a lot of money... 
+
+     There is, of course, no guarantee or warranty of any kind.
+
+     (c) 1990 C.Horn, M.Dziadzka, M.Horn
+
+     Ported, adapted, and maintained for RISC-OS by Andrew Stevens
+     RISC-OS Modifications (c) 1990 Andrew Stevens
+
+DESCRIPTION
+
+     HUProlog is, an almost 100 per cent straight implementation of
+     standard Edinburgh syntax Prolg as described in Clocksin and
+     Mellish's ``Programming in Prolog'' (Springer Verlag)
+     and a host of other works. The sections below detail the deviations.
+     If you're learning Prolog a good book to start with is Ivan Bratko's.
+     I forget the title, but it has Prolog in it - a decent computer bookshop
+     will either stock or easily find it for you.
+
+     HU-Prolog is most definately NOT a toy Prolog.  The authors and
+     myself are all professional AI and computer science research workers,
+     and rely on HU-Prolog for a variety of large-scale Prolog
+     programming tasks.  It is definately one of the fastest purely
+     interpreted Prolog's around (the only faster one I know of is the
+     Edinburgh NIP implementation).  WAM-based compiling Prolog's
+     are faster, but at the price of greatly increased memory requirements.
+     Even then ``real programs'' as opposed to benchmarks rarely run 
+     more than twice as fast.  Eventually I (or someone else) may port
+     Sicstus or SB Prolog for RISC-OS, in the meantime HU is as good as
+    it gets.
+
+     For source code availability see the AUTHOR's section at the end.
+
+INSTALLATION
+     To install HU-Prolog execute the Obey file ``BUILDSS''.
+     This will build a file called ``huplstate'' that contains
+     the default start-up state for HU-Prolog.  HU-Prolog can then
+     be installed by putting the files ``hup'', ``prolog'', and
+     ``huplstate'' into wherever you like to keep command line
+     orientated programs.   The process requires a WIMPSLOT of 640K -
+     though you may find you can get away with a little less.
+ 
+     You may also find you will also need to
+     install an up to date shared C library and/or floating point
+     emulation library, but this is fairly improbable.  
+
+RUNNING HU-Prolog
+     Once installed HU-Prolog is run by executing the ``hup'' obey
+     script.  By far the best place to do this is within a TASK window
+     running under !Edit (or some other editor).  This allows Prolog
+     to multi-task, and gives you decent command dialogue editting
+     facilities.
+
+     Obviously, you need to set the WIMPSLOT to some appropriate
+     value if you wish to run HU-Prolog with large programs.  New releases
+     of the C library are reputed extend WIMPSLOT's automatically to suit
+     program's requirements, but until then a bit of manual tweaking is
+     required.  As a guide:
+
+     Term's and critical variables require 8 bytes each, whilst
+     Atom's require 28 bytes each and Active Goals require 32 bytes each.
+     Prolog itself requires around 140K -- the executable file is squeezed.
+    
+START UP AND EXITING
+      When HUProlog starts up it first loads its initial state.  If no -r
+      ``restore state' command line argument is given this is the file
+      <HUPro$Dir>.huplstate.    The ``hup'' script automatically
+      sets HUPro$Dir to the directory where it was executed unless it
+      has already been set.
+
+      Next the start-up file is consulted.  If no -l ``startup file''
+      command line argument is given this is the file named in the
+      <HUPro$RC> system variable.  If this variable isn't set the
+      file ``prologrc'' is tried.   No error oocurs if the startup
+      file doesn't exist.
+
+      You exit HU-Prolog by typing either control-D or ``end_of_file.''.
+      Details of the facilities available in HU-Prolog, BUGS, and source
+      code availability are described below.
+          
+
+OPTIONS
+       -r     -    Restore named saved state.
+
+       -l     -    Consult named file at start-up
+
+       -v     -    Turn off verbosity - no prompt (etc).
+
+       -BOOT  -    Bootstrap HUProlog after recompilation
+
+       -a     -    Set max number atoms for which space is to be 
+                   allocated.  DEFAULT 2000.
+
+       -t     -    Set max number of terms for which space is to
+                   be allocated.  DEFAULT 40000.
+
+       -c     -    Set maximum number of critical variables for which
+                   stack space is to be allocated.  DEFAULT 4000.
+
+       -g     -    Set maximum number of active goals for whcih stack space
+                   is to be allocated.  DEFAULT 2000.
+
+       -s     -    Set number of bytes of string space to be allocated.
+                   DEFAULT 15000.
+
+        Defaults represent a memory usage of aound 650K - suitable for a
+        1M byte Archy.
+
+OMMISIONS
+
+     The only significant ommision is that HU-Prolog does not implement
+     the (rarely used outside natural language research) syntax for
+     defining definate clause grammars.
+
+     As with a lot of Prolog's (all?) setof and bagof are not overwhelmingly
+     efficient.   HU-Prolog has these loaded in the default saved states,
+     but also includes the more efficient (and useful) findall/3 and findset/3.  
+     A fancy (and efficient) sorting predicate ksort/2,ksort/4 is also
+     included.  Source can be found in in the set_of file.
+
+EXTENSIONS
+     fileerrrors, fileerrors(on) - File errors cause an abort
+     nofileerrors, fileeerrors(off) - File errors merely cause a fail.
+     syneclose          - Close file being read when syntax error detected.  Default.
+     nosyneclose        - Leave file being read open when syntax error detected.
+     warn(off)          - No warning messages  Default
+     warn(on)           - Warning messages
+     ocheck(off)        - No occurs check during unification - standard Prolog. Default.
+     ocheck(on)         - Occurs check udring unification (much slower with
+                          big terms, but it means unification cannot 
+                          accidentally loop).
+     sysmode(off)       - System defined operators may not be changed.
+     sysmode(on)        - System define operators may be changed.
+     echo(off)          - Don't echo queries  Default
+     echo(on)           - echo queries. 
+
+     is_member/2        - Fast list membership test 
+     no_member/2        - Fast list non-mebmbership test,
+     sysappend/3        - Fast append for proper lists.
+
+    assert(Term,Ref),
+    asserta(Term,Ref),
+    assertz(Term,Ref)   - Database assertion returning database reference
+    clause(Head,Body,Ref ) - Fast clause access using database reference
+    abolist(Head,Body,Ref) - Fast clause abolition using database ref.
+    retract(Term,Ref)   - Fast database retract using reference
+
+    sort/2              - Sort a list of terms, stripping duplicates.
+    sort1/2             - Sort a list of terms, preserving duplicates.
+    stats               - Print memory usage statistics.
+    argc/1              - Give number of uninterpreted command line args
+    argv/2              - Get one of the uninterpreted command line args
+    <<,>>               - Bitwise shift functions for `is' expressions
+    &,\,~               - Bitwise and, or, and not for `is' expressions
+    &&,\\,/             - Boolean and, or and not for `is' expressions
+
+
+    Errors can be trapped by defining the predicate error/2
+    When an error occurs this will be invoked with the first
+    argument bound to the goal causing the error, and the second to
+    the associated error message.
+
+    User interrupts (hitting the ESC key) can be trapped by defining
+    the predicate interrupt/0 in the code loaded in the initial
+    -BOOT start-up.  Similarly calls to undefined predicates can
+    be trapped by defining undefined. 
+
+SAVED STATES
+
+     The default saved state for Prolog is built by what amounts to
+     typing:
+
+     prolog -BOOT
+     [prologrc,set_of].     % You can of course load other stuff here!
+     save(huplstate).
+     ^D
+
+     at HU-Prolog.
+
+     You can dump a saved state at any time in a Prolog run by executing
+     save(filename).  The resulting prolog state can be restored by
+     re-starting prolog with the file specified with -r flag.  Note that
+     saved states can be pretty large.  500K is not unusual.  I suspect
+     bad things are likely to happen if you attempt to load a saved state
+     into prolog that has had insufficient space allocated.
+
+     If you wish to build a saved state on top of the ``bare'' Prolog system,
+     simply start prolog with the -BOOT flag set, load in the stuff you want
+     and then save.
+
+   
+DEBUGGING
+
+     HUProlog has the usual Prolog trace and spy-point facilities.
+     A spy-point can be set on a predicate by the query:
+     spy( name-of-predicate) or
+     spy( name-of-predicate/arity-of-predicate)
+     nospy( <as above> ) removes spy-points.
+     nodebug temporarily causes spy-points to be ignored.
+     debug  causes spy-points to be obeyed again.
+
+     trace turns on tracing.
+     notrace turns off tracing.
+
+     When tracing or at a spy-point:
+     t - starts tracing
+     n - goes to next spy-point
+     CR - traces or goes to next spy-point depending
+          on whether current tracing or spying.
+     f - causes the current query to fail
+     a - aborts the current program execution
+
+     The default saved states add in a handler for
+     escape-key-pressed interrupts which allows
+     a - aborts current program execution
+     @ - allows a sub-query to be executed
+     t - turns on tracing.
+
+     Due to a deficiency in the way file consultation works,
+     this handler will not work when invoked during the
+     consultation of a file.   Input is taken from the file
+     being consulted, rather than the console.
+
+AUTHORS
+      C.Horn, M.Dziadzka, M.Horn
+      Department of Mathematics     
+      Humboldt-University
+      (East) Berlin
+      Germany.
+
+      Due to German re-unification the original authors are probably
+      more reliably contacted though me (Andrew Stevens).
+
+     Archimedes port:   Andrew Stevens  
+     Andrew Stevens,      JANET: as@uk.ac.ed.aipna
+     18 Kings Meadow,     INTERNET:  as@aipna.ed.ac.uk
+     Overton,             UUCP:   ...!ukc!aipna!as
+     Basingstoke,
+     HANTS.
+
+     RG25 3HP
+
+     Please feel free to contact me (Andrew Stevens) if you have any queries - 
+     though it might take me a little while to reply. Especially by postal
+     mail.  
+     If you are interested in modifying, debugging(!), or enhancing HU-Prolog 
+     source code is available.  If you have access to JANET it is available
+     on the newcastle info-server info-server@uk.ac.newcastle.
+
+     The addition of an interface to the RISC-OS GUI
+     would be most appreciated!
+
+BUGS
+    open/1  sometimes fails mysteriously.
+
+    Saved states are not stored very efficiently - ASCII numbers!
+
+    The bodge with syneclose is a messy consequence of the fact
+    that RISC-OS is too stupid to allow writing to open files.
+
+    see's behaviour when not properly nested with seen's
+    is not entirely standard I think. It is, however, sensible.
+
+    If you attempt to redefine a system predicate in
+    the start-up file outside boot mode the system crashes.
+    The start-up file is, furthermore, not read during boot mode!
+
+    The debugger handles backtracking very poorly.
+
+    The setof and bagof predicates are not built-in's, only loaded.
+
+    The sort predicates use a O(n^2) algorithm.  For big sorts use the
+    ksort predicate defined in set_of - it is O(n*log(n)).
+
+    The program does *not* multi-task or run under the desktop on its
+    own.  It multi-tasks etc just fine, however, when run under a !Edit
+    task window.
+
+    It is not clear when saved states made with HUProlog with
+    one set of memory allocations will load into one set up
+    with others.
+
+    It certainly will work provided if the creating HUProlog
+    was configured with all parameters  smaller than the loading 
+    HUProlog.
+
+    It should also work if the loading HUProlog is big enough
+    in all parameters, and the saved state was dumped ``clean''.
+    I.e. the save/1 predicate was invoked from the Prolog
+    command prompt.  No guarantees, however - thats why this is
+    in the BUGS list!

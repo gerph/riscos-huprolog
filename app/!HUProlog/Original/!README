@@ -1,0 +1,60 @@
+/***************************************************
+****************************************************
+**                                                **
+**  HU-Prolog     Portable Interpreter System     **
+**                                                **
+**  Release 1.62   January  1990                  **
+**                                                **
+**  Authors:      C.Horn, M.Dziadzka, M.Horn      **
+**                                                **
+**  Formerly of Humboldt university E.Berlin      **
+**                                                **
+****************************************************
+***************************************************/
+
+
+This is version 1.1 a port of the HUProlog interpreter for
+the Acorn Archimedes.   See the file ``MANUAL'' for information
+on the system.
+
+HUProlog is freeware.  It may be freely copied and redistributed, provided
+all the files present in this distribution are included,  unaltered.  If it
+is redistrubted for profit or frequently used the authors would appreciate
+it if an appropriate contribution were sent c/o Andrew Stevens at
+the address below.
+
+
+There is *no* warranty, or guarantee of any kind for this software.
+
+The Archimedes version is ported, modified and maintained  by:
+
+     Andrew Stevens,      JANET: as@uk.ac.ed.aipna
+     18 Kings Meadow,     INTERNET:  as@aipna.ed.ac.uk
+     Overton,             UUCP:   ...!ukc!aipna!as
+     Basingstoke,
+     HANTS.
+
+     RG25 3HP
+
+Who many be contacted if there any queries, bugs, features,
+future releases etc relating to the Archimedes version.
+
+FILES:
+
+     MANUAL   - Documentation, further information etc
+     !README  - This File
+     NREV     - Benchmark test for Prolog   
+     interrupt- Current Interrupt handler for Prolog
+     SET_OF   - Various setof/3 bagof/3 goodies to be pre-loaded
+                into prolog.
+     prolog   - Prolog interpreter
+     hup      - Example obey script for running HUProlog
+     BUILDSS  - Obey script used when installing HUProlog
+     defss    - used by BUILDSS
+
+HUProlog needs C libraries  rel 3.5 or later to
+run.
+
+See MANUAL for information on installing and running HU-Prolog.
+
+See MANUAL for information on obtaining source code etc.

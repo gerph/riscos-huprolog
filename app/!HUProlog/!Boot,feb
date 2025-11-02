@@ -1,0 +1,12 @@
+| !Boot file for HUProlog
+| by Justin Fletcher (20 Nov 1996)
+| based on file by Andrew Wenn 8/5/91
+
+If "<HUPro$Dir>" = "" Then Set HUPro$Dir <Obey$Dir>
+IconSprites <Obey$Dir>.!Sprites
+|
+Alias Prolog /<HUPro$Dir>.!Run %%*0
+|
+| Note: This is a registered filetype
+Set Alias$@RunType_148 prolog %%*0
+Set File$Type_148 Prolog
