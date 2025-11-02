@@ -1,0 +1,147 @@
+/*
+                        README for DCG file.
+
+Written by Andrew Wenn.
+Version 1.1.
+Last revised 17/6/91.
+
+DCG is a program written using Humbroldt Prolog, that allows a 
+file written in standard DCG format to be consulted and converted 
+into Prolog clauses. The Program is in the public domain and can
+be freely distributed as long as this README file appears with it.
+
+It is based on the DCG translator that appears in the book 
+"Prolog and its Applications - a Japanese Perspective" edited by 
+Fumio Mizoguchi and published by Chapman Hall Computing, 1991.
+
+It has however been modified so that it can read in a list of 
+files in DCG format, or a single file with an atomic filename. 
+See the section on usage below.
+
+In addition to this, I have included a clause that allows it to 
+deal with cuts that are explicitly inserted into the DCG format 
+function. This means that rather than having to use {} around the 
+cut symbol as in 
+
+    question --> [does], {!}, noun_phrase, verb_phrase.
+
+the DCG format function can appear in the file as:
+
+    question --> [does], !, noun_phrase, verb_phrase.
+
+It may be argued that the times when this type of construct 
+appears are minimal, but the facility is there when needed.
+
+USAGE.
+
+As stated above the DCG translator can be used to consult a list 
+of files; In this case use:
+
+          dcg([File1, File2, .....]).
+
+or it can be used to consult one file whose name is an atom. In 
+this case use:
+
+          dcg(File).
+
+When used to consult a list of files, as each is read the name of 
+the file will be echoed to the screen.
+
+This translator can also be used to translate files entered from 
+the keyboard, in which case the usage is:
+
+          translate( (noun --> [computer]) ).
+
+
+
+
+KNOWN PROBLEMS.
+
+Dare I say that there are no known problems at the moment. It 
+does however appear that the error trapping clause translate(X) 
+does not pickup all syntax errors in a DCG file.
+
+CONTACT PERSON.
+
+If you have any suggestions for improvements or find any problems 
+with the program please contact me by email at:
+
+          awenn@matilda.vut.edu.au
+
+*/
+
+/***************************************************************************/
+/*                                                                         */
+/*    A program that allows prolog clauses written in DCG form to be       */
+/*                   read in and interpreted by HU Prolog.                 */
+/*                                                                         */
+/*                             Uses HU Prolog.                             */
+/*                                                                         */
+/*                      Last modified by Andrew Wenn 17/6/91.              */
+/*                                                                         */
+/***************************************************************************/
+
+/* File dependencies */
+
+% Used by anything that is writen in DCG form.
+
+% Requires                                     
+
+?- op(1100, xfx, '-->').   % Declare the operator.
+
+dcg([]):- !.
+dcg([First|Rest]):-
+    dcg(First),
+    dcg(Rest).
+
+dcg(File):-
+    fileerrors,
+    see(File),
+    repeat,
+        dcg1,
+    seen,
+    ttywrite(File),
+    ttywrite(' consulted.\n').
+
+dcg1:-
+    read(X),
+    (X = end_of_file -> true;
+        translate(X), !, fail).
+
+translate((A --> B)) :-
+    dcg_xterm(A, AA, S1, Sn),
+    dcg_xbody(B, BB, S1, Sn),
+    assert((AA :- BB)).
+translate(X):-
+    ttywrite('Illegal DCG syntax : '),
+    display(X),
+    syneclose,
+    nl.
+
+dcg_xbody((B, C), BX, S1, Sn):-
+    !,
+    dcg_xterm(B, BB, S1, S2),
+    dcg_xbody(C, CC, S2, Sn),
+    (BB == true -> BX = CC; BX = (BB, CC)).
+dcg_xbody(B, BB, S1, Sn):-
+    dcg_xterm(B, BB, S1, Sn).
+
+dcg_xterm( {B}, B, S, S):- !.
+dcg_xterm(!, !, S, S):- !.
+dcg_xterm([], true, S, S):- !.
+dcg_xterm(B, true, S1, Sn):-
+    B = [_|_],
+    !,
+    dcg_append(B, Sn, S1).
+dcg_xterm(A, AA, S1, S2):-
+    A =.. [N|Args],
+    AA =.. [N, S1, S2|Args].
+
+dcg_append([], X, X).
+dcg_append([A|X], Y, [A|Z]):-
+    dcg_append(X, Y, Z).
+ 
+------------
+Andrew Wenn.
+
+

@@ -1,0 +1,30 @@
+%  Prolog start up file for CLaM
+
+?- sysmode(on).
+interrupt :- ttynl,
+                 ttywrite('Interrupted'),
+                 ttynl,
+%                 seeing(F),
+%                 see(user),
+                 repeat,
+                 ttywrite( '[t@a]'),
+                 ask(I),
+                 name(NI,[I]),
+                call( (NI='@' -> do_subcall ; true ) ),
+                ( NI='a' -> abort ; true ),
+                ( \+ NI = 't' -> true ; trace ),
+!.
+%                !,
+%                see(F).
+
+do_subcall :-
+    ttywrite( '| ?- ' ),
+    ttyread(X),
+    !,
+    call(X),
+    !,
+    fail.
+
+?- sysmode(off).
+
+?- nofileerrors.

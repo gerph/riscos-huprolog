@@ -1,0 +1,73 @@
+Version 1.5.2 of HUProlog
+--------------------------
+
+HUProlog is freeware.  It may be freely copied and redistributed, provided
+all the files present in this distribution are included,  unaltered.  If it
+is redistrubted for profit or frequently used the authors would appreciate
+it if an appropriate contribution were sent c/o Andrew Stevens at
+the address below.
+
+There is *no* warranty, or guarantee of any kind for this software.
+
+The Archimedes version is ported, modified and maintained  by:
+
+     Andrew Stevens,      JANET: as@uk.ac.oxford.prg
+     18 Kings Meadow,     INTERNET:  as@prg.oxford.ac.uk
+     Overton,             UUCP:   ...!ukc!oxford.prg!as
+     Basingstoke,
+     HANTS.
+
+     RG25 3HP
+
+Who many be contacted if there any queries, bugs, features,
+future releases etc relating to the Archimedes version.
+
+FILES:
+
+     DOC      - Documentation, further information etc
+     MANUAL   - Full user manual in German (see DOC).
+     !README  - This File
+     NREV     - Benchmark test for Prolog   
+     interrupt- Current Interrupt handler for Prolog
+     SET_OF   - Various setof/3 bagof/3 goodies to be pre-loaded
+                into prolog.
+     DCGINTER - Stuff to support DCG grammars contributed by Andrew Wenn.
+     prolog   - Prolog interpreter
+     hup      - Example obey script for running HUProlog
+     BUILDSS  - Obey script used when installing HUProlog
+     defss    - used by BUILDSS
+     Clib     - Acorn C library version 3.66
+     FPEmulator - Acorn Floating point emulator version 2.80
+
+This version, although significantly tidied internally,
+should be funcionally largely identic to the previous
+released version 1.20.
+
+The only significant differences are:
+
+(1) Floating point arithmetic is supported.
+(2) Some extensions to prolog centred around := and =:=
+    operators are built in.    These are probably best ignored
+    for now!
+
+(3) The debugger reads the current input stream rather than the
+    console when it appears - this bug should be fixed in later
+    versions.
+
+Please note that saved states are *not* compatible between the two
+versions.
+
+
+The binary supplied is compiled for Clib version 366 and
+floating emulation version 280 upwards  copies of which
+are included.  The obey file ``pro'' expects these either
+to be loaded before it is run, or kept in a sub-directory
+called modules in your !System directory.  Edit ``pro''
+if neither of these are convenient.
+
+More extensive
+documentation of the details of the HU-Prolog implementation
+of Prolog can be found in the file DOC.   AN extensive
+user-manual (in German) is in the file MANUAL.  I am currently
+translating this latter into English.
+

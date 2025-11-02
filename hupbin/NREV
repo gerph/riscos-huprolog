@@ -1,0 +1,48 @@
+
+app([],X,X).
+app([H|X],Y,[H|Z]):-
+    app(X,Y,Z).
+
+nrev([],[]).
+nrev([X|Y],Z):-
+    nrev(Y,T),
+    app(T,[X],Z).
+
+genlist(I,[I|L]):-
+    I>0,
+    Y is I- 1,
+    genlist(Y,L).
+genlist(0,[]).
+
+gen(N) :- 
+    genlist(N,X),asserta(numlist(X)).
+
+test:-
+        numlist(X), timer(0), u(X), timer(T),
+        LIPS is 5000000//T, retract(a(A)), SA is A+LIPS, asserta(a(SA)),
+        retract(n(N)), SN is N+1, asserta(n(SN)),
+        S is SA//SN,
+        write('LIPS:'),write(LIPS),write('    S='),write(S),nl,!.
+
+exec(X):-nrev(X,_),!,fail.
+u(X):-exec(X).
+u(X):-exec(X).
+u(X):-exec(X).
+u(X):-exec(X).
+u(X):-exec(X).
+u(X):-exec(X).
+u(X):-exec(X).
+u(X):-exec(X).
+u(X):-exec(X).
+u(X):-exec(X).
+u(_).
+
+run:-repeat,test,fail.
+
+?- asserta(a(0)),asserta(n(0)).
+?- gen(100).
+?- write('\nStandard Benchmark Test  10*nrev(100)\n').
+?- test.
+?- test.
+?- test.
+
