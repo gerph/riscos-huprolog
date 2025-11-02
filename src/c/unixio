@@ -2,22 +2,33 @@ struct { int dummy ; } __extradata;
 
 #include   <stdio.h>
 #include   <stdlib.h>
+#include   <string.h>
 #include   <kernel.h>
+
+#define NHANDLES (32)
+#define MINHANDLE (3)
 
 static char *opentab[] = { "r", "w" "r+" };
 static int  unixio_raw = 1;
-static int  activetab[_SYS_OPEN];
+static FILE *handles[NHANDLES];
 
 #define SETUP if( unixio_raw ) setup_unixio()
+#define CHECK(strmno) \
+    do { \
+       if (strmno < 0 || strmno >= NHANDLES || \
+           handles[strmno] == NULL) \
+         return -1; \
+       hndle = handles[strmno]; \
+    } while (0)
 
 static void setup_unixio(void)
 {
 int i;
-    for( i = 0; i < _SYS_OPEN; ++i )
-       activetab[i]=0;
-/*    setvbuf( stdin , NULL, _IONBF, (size_t)0 );
-    setvbuf( stdout , NULL, _IONBF, (size_t)0 );
-    setvbuf( stderr , NULL, _IONBF, (size_t)0 ); */
+    for( i = 0; i < NHANDLES; ++i )
+       handles[i] = NULL;
+    handles[0] = stdin;
+    handles[1] = stdout;
+    handles[2] = stderr;
     unixio_raw = 0;
 }
 
@@ -31,8 +42,24 @@ FILE  *hndle;
       hndle = fopen( name, opentab[mode] );
       if( hndle == NULL )
           return -1;
-      setvbuf( hndle, NULL, _IONBF, (size_t)0 );
-      return hndle - __iob;
+      {
+        /* Find a handle */
+        int handle;
+        for (handle= MINHANDLE;
+             handle<NHANDLES;
+             handle++)
+        {
+            if (handles[handle] == NULL)
+                break;
+        }
+        if (handle == NHANDLES)
+        {
+            fclose(hndle);
+            return -1; /* No free handles */
+        }
+        setvbuf( hndle, NULL, _IONBF, (size_t)0 );
+        return handle;
+      }
 }
 
 int creat(char *name, int access)
@@ -43,15 +70,37 @@ FILE  *hndle;
       hndle = fopen( name, "w+" );
       if( hndle == NULL )
           return -1;
-      setvbuf( hndle, NULL, _IONBF, (size_t) 0 );
-      return hndle - __iob;
+
+      {
+        /* Find a handle */
+        int handle;
+        for (handle= MINHANDLE;
+             handle<NHANDLES;
+             handle++)
+        {
+            if (handles[handle] == NULL)
+                break;
+        }
+        if (handle == NHANDLES)
+        {
+            fclose(hndle);
+            return -1; /* No free handles */
+        }
+        setvbuf( hndle, NULL, _IONBF, (size_t)0 );
+        return handle;
+      }
 }
 
-    
+
 int close(int strmno)
 {
        SETUP;
-       return fclose( &__iob[strmno] );
+       if (strmno < 0 || strmno >= NHANDLES ||
+           handles[strmno] == NULL)
+         return -1;
+       fclose( handles[strmno] );
+       handles[strmno] = NULL;
+       return 0;
 }
 
 int unlink(char *name)
@@ -59,12 +108,17 @@ int unlink(char *name)
        return remove( name );
 }
 
-int isatty(int strmno)
+int hu_isatty(int strmno)
 {
-FILE  *hndle;
        SETUP;
-       hndle = &__iob[strmno];
-       return hndle == stdin || hndle == stdout || hndle == stderr;
+       switch (strmno)
+       {
+        case 0:
+        case 1:
+        case 2:
+            return 1;
+       }
+       return 0;
 }
 
 int write(int strmno, char *buf, int len)
@@ -72,7 +126,7 @@ int write(int strmno, char *buf, int len)
 FILE  *hndle;
 int   written;
       SETUP;
-      hndle = &__iob[strmno];
+      CHECK(strmno);
       written = (int) fwrite( buf, (size_t) 1, (size_t) len, hndle );
       if( fflush(hndle) )
           return -1;
@@ -85,11 +139,9 @@ int read(int strmno, char *buf, int len)
 {
 FILE  *hndle;
 int   readden;
-int   i = 0;
-char  *ret;
 
       SETUP;
-      hndle = &__iob[strmno];
+      CHECK(strmno);
       if( hndle == stdin ) {
         if( fgets( buf, len, stdin ) == NULL )
           readden = 0;
@@ -112,7 +164,7 @@ int lseek(int strmno, long position, int whence)
 {
 FILE *hndle;
      SETUP;
-     hndle = &__iob[strmno];
+     CHECK(strmno);
      return fseek( hndle, position, fseektab[whence] );
 }
 

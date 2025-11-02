@@ -89,6 +89,9 @@ EXPORT   boolean IOERRORFLAG
 #if CPM
 #define isatty(f)    (!(f<0 || f>2))
 #endif
+#ifdef __riscos
+#define isatty(f) hu_isatty(f)
+#endif
 
 FORWARD void FileError();  /* forward declaration */
 FORWARD void InitIO();
