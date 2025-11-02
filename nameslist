@@ -1,5 +1,0 @@
-rename  $._files $.files 
-rename  $.files._humboltsr $.files.humboltsrc 
-rename  $.files.humboltsrc._h $.files.humboltsrc.h 
-rename  $.files.humboltsrc._c $.files.humboltsrc.c 
-*quit

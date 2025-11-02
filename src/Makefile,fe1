@@ -33,24 +33,24 @@ CDEFINES   = -DARCHY -DDYNMEM
 LIBS       = ${CLIB}
 
 # Objects to build, using the format o.<name> (will be varied for build type)
-OBJS       = o.ARITH \
-             o.ATOMS \
-             o.DATAB \
-             o.EVAL \
-             o.EXEC \
-             o.IO \
-             o.MANAGER \
-             o.MEMORY \
-             o.MISC \
-             o.PROLOG \
-             o.READ \
-             o.SAVE \
-             o.SYMBOL \
-             o.SYS \
-             o.UNI \
+OBJS       = o.arith \
+             o.atoms \
+             o.datab \
+             o.eval \
+             o.exec \
+             o.io \
+             o.manager \
+             o.memory \
+             o.misc \
+             o.prolog \
+             o.read \
+             o.save \
+             o.symbol \
+             o.sys \
+             o.uni \
              o.unixio \
-             o.USER \
-             o.WRITE \
+             o.user \
+             o.write \
 
 # Space separated list of XML files for building documentation.
 #DOCSRC = <prm-in-xml-sources>
