@@ -8,7 +8,7 @@ struct { int dummy ; } __extradata;
 #define NHANDLES (32)
 #define MINHANDLE (3)
 
-static char *opentab[] = { "r", "w" "r+" };
+static char *opentab[] = { "r", "w", "r+" };
 static int  unixio_raw = 1;
 static FILE *handles[NHANDLES];
 
