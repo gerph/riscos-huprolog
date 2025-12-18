@@ -57,6 +57,7 @@ FILE  *hndle;
             fclose(hndle);
             return -1; /* No free handles */
         }
+        handles[handle] = hndle;
         setvbuf( hndle, NULL, _IONBF, (size_t)0 );
         return handle;
       }
